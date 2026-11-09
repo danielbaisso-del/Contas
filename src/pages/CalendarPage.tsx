@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { MoneyText } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
@@ -8,8 +9,17 @@ import { cx } from "@/lib/utils";
 
 export function CalendarPage() {
   const { data, today } = useFinance();
-  const [month, setMonth] = useState(currentMonth(today));
-  const [selected, setSelected] = useState(today);
+  const [params] = useSearchParams();
+  const requestedMonth = params.get("mes");
+  const requestedDay = params.get("dia");
+  const [month, setMonth] = useState(requestedMonth && /^\d{4}-\d{2}$/.test(requestedMonth) ? requestedMonth : currentMonth(today));
+  const [selected, setSelected] = useState(requestedDay && /^\d{4}-\d{2}-\d{2}$/.test(requestedDay) ? requestedDay : today);
+  useEffect(() => {
+    const nextMonth = params.get("mes");
+    const nextDay = params.get("dia");
+    if (nextMonth && /^\d{4}-\d{2}$/.test(nextMonth)) setMonth(nextMonth);
+    if (nextDay && /^\d{4}-\d{2}-\d{2}$/.test(nextDay)) setSelected(nextDay);
+  }, [params]);
   const cells = useMemo(() => calendarCells(month), [month]);
   const cash = calendarCashEvents(data, selected);
   const cards = calendarCardEvents(data, selected);

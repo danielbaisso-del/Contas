@@ -8,7 +8,7 @@ function localApiPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url?.split("?")[0] ?? "";
-        if (url !== "/api/assistant" && url !== "/api/categorize" && url !== "/api/admin") {
+        if (url !== "/api/assistant" && url !== "/api/categorize" && url !== "/api/admin" && url !== "/api/household") {
           next();
           return;
         }
@@ -16,6 +16,7 @@ function localApiPlugin(): Plugin {
           const mod = await server.ssrLoadModule("/server/devAdapter.ts");
           if (url === "/api/assistant") await mod.handleAssistant(req, res);
           else if (url === "/api/admin") await mod.handleAdmin(req, res);
+          else if (url === "/api/household") await mod.handleHousehold(req, res);
           else await mod.handleCategorize(req, res);
         } catch (error) {
           res.statusCode = 500;

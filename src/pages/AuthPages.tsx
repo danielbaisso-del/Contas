@@ -70,12 +70,11 @@ export function LoginPage() {
   return (
     <AuthShell title="Entrar" text="Sua sessão fica guardada neste navegador até você sair.">
       <form className="space-y-4" onSubmit={submit}>
-        <Field label="Usuário ou e-mail"><Input required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="equipe" autoComplete="username" /></Field>
+        <Field label="Usuário ou e-mail"><Input required value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" /></Field>
         <Field label="Senha"><Input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></Field>
         {error ? <p className="text-sm text-expense">{error}</p> : null}
         <Button type="submit" loading={loading} className="w-full">Entrar</Button>
       </form>
-      <p className="mt-4 rounded-2xl bg-surface-2 px-4 py-3 text-sm leading-6 text-muted">Acesso da equipe: usuário <strong className="text-ink">equipe</strong> e senha <strong className="text-ink">admin123</strong>.</p>
       <p className="mt-4 text-sm text-muted"><Link className="text-accent" to="/recuperar-senha">Esqueci a senha</Link> · <Link className="text-accent" to="/cadastrar">Criar conta</Link></p>
     </AuthShell>
   );

@@ -1,13 +1,15 @@
-import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantResponse, type TransactionDraft } from "@/domain/assistant";
+import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantPlace, type AssistantResponse, type TransactionDraft } from "@/domain/assistant";
 import { resolveAmountCents, resolveOccurredOn, suggestCategory } from "@/domain/resolveText";
+import { buildDashboard } from "@/finance/engine";
 import { planBankInstallments, planCardInstallments, installmentsForDatabase } from "@/finance/installments";
-import { formatDateBR, todayISO } from "@/lib/dates";
+import { formatDateBR, monthKey, todayISO } from "@/lib/dates";
 import { accountTypeLabel, COLORS, paymentMethodLabel, statusLabel } from "@/lib/labels";
 import { formatBRL, parseMoneyToCents } from "@/lib/money";
 import { matchByName, normalizeText } from "@/lib/utils";
 import { mapAccount, mapCard, mapCategory, mapInvoice, mapRecurrence, mapTransaction } from "@/services/mappers";
 import type { FinanceData } from "@/types/models";
-import { answerQuery } from "./answers";
+import { answerQuery, chartForQuery, placeAfterSave, placeForQuery, placeFromText } from "./answers";
+import { householdBundle } from "./household";
 import { geminiJson, parseModelJson } from "./gemini";
 import { HttpError, readJson, sendJson, type NodeRequest, type NodeResponse } from "./http";
 import { consumeAiQuota, requireUser, userClient } from "./supabase";
@@ -16,7 +18,7 @@ const SYSTEM = `Você interpreta pedidos do Assistente Financeiro do aplicativo 
 Devolva somente JSON. Não calcule saldo, não invente valor e não escreva SQL.
 Datas em YYYY-MM-DD. amount_cents é inteiro em centavos: R$ 85 vira 8500 e R$ 1.500,50 vira 150050.
 Recebi ou salário = income. Gastei, paguei ou comprei = expense. Transferi entre contas = create_transfer.
-Pergunta sobre saldo, gasto, sobra ou "posso comprar" = query. Não responda o número.
+Pergunta sobre saldo, gasto, sobra, categoria, previsão ou "posso comprar" = query. Não responda o número. Qualquer pergunta sobre os dados da pessoa é query, mesmo que não peça para lançar.
 Se faltar dado para lançar, use action clarify.
 Formato:
 {"action":"chat|clarify|create_transaction|create_transfer|query","message":"","missing":[],"draft":{"description":"","amount_cents":0,"type":"expense","occurred_on":"","due_on":null,"category_name":null,"account_name":null,"card_name":null,"payment_method":null,"notes":null,"status":null,"installments":1},"transfer":{"description":"Transferência","amount_cents":0,"occurred_on":"","from_account_name":"","to_account_name":""},"query":{"metric":"available_balance|month_overview|forecast|category_total|upcoming|can_afford|account_balance","category_name":null,"account_name":null,"month":null,"months":null,"days":null,"amount_cents":null,"installments":null,"payment":null,"starting_on":null}}`;
@@ -245,7 +247,7 @@ function buildAccount(text: string, data: FinanceData, earlier: string): Assista
   };
 }
 
-async function confirmDraft(token: string, body: Record<string, unknown>, data: FinanceData): Promise<string> {
+async function confirmDraft(token: string, body: Record<string, unknown>, data: FinanceData): Promise<{ reply: string; place: AssistantPlace }> {
   const client = userClient(token);
   const today = todayISO();
   const { data: auth } = await client.auth.getUser(token);
@@ -267,7 +269,7 @@ async function confirmDraft(token: string, body: Record<string, unknown>, data: 
       color: draft.color,
     });
     if (error) throw new HttpError(400, "Não consegui criar a conta.");
-    return `Conta ${draft.name} criada com saldo inicial de ${formatBRL(draft.initial_balance_cents)}.`;
+    return { reply: `Conta ${draft.name} criada com saldo inicial de ${formatBRL(draft.initial_balance_cents)}.\n\nA tela Contas já mostra este saldo.`, place: placeAfterSave("account", {}) };
   }
   if (body.kind === "transfer") {
     const parsed = transferDraftSchema.safeParse(body.draft);
@@ -289,7 +291,7 @@ async function confirmDraft(token: string, body: Record<string, unknown>, data: 
       payment_method: "transfer",
     });
     if (error) throw new HttpError(400, "Não consegui salvar a transferência.");
-    return `Transferência de ${formatBRL(draft.amount_cents)} salva. O total das suas contas não muda.`;
+    return { reply: `Transferência de ${formatBRL(draft.amount_cents)} salva. O total das suas contas não muda.\n\nAs duas contas estão na tela Contas.`, place: placeAfterSave("transfer", {}) };
   }
 
   const parsed = transactionDraftSchema.safeParse(body.draft);
@@ -319,7 +321,7 @@ async function confirmDraft(token: string, body: Record<string, unknown>, data: 
       },
     });
     if (error) throw new HttpError(400, "Não consegui lançar a compra no cartão. Se a fatura do mês já estiver paga, desfaça o pagamento antes.");
-    return `Compra de ${formatBRL(draft.amount_cents)} lançada no cartão ${card.name}. O saldo da conta só muda quando você pagar a fatura.`;
+    return { reply: `Compra de ${formatBRL(draft.amount_cents)} lançada no cartão ${card.name}. O saldo da conta só muda quando você pagar a fatura.\n\nO cartão abre com esta compra.`, place: placeAfterSave("card_purchase", draft) };
   }
 
   if (!draft.account_id) throw new HttpError(400, "Escolha a conta desse lançamento.");
@@ -344,7 +346,7 @@ async function confirmDraft(token: string, body: Record<string, unknown>, data: 
       installment_total: count,
     })));
     if (error) throw new HttpError(400, "Não consegui salvar as parcelas.");
-    return `${count} parcelas salvas. A soma continua ${formatBRL(draft.amount_cents)}.`;
+    return { reply: `${count} parcelas salvas. A soma continua ${formatBRL(draft.amount_cents)}.\n\nA visão geral deste mês já inclui a primeira parcela nos gráficos.`, place: placeAfterSave("transaction", draft) };
   }
 
   const { error } = await client.from("transactions").insert({
@@ -361,7 +363,87 @@ async function confirmDraft(token: string, body: Record<string, unknown>, data: 
     notes: draft.notes ?? null,
   });
   if (error) throw new HttpError(400, "Não consegui salvar o lançamento.");
-  return `${draft.type === "income" ? "Receita" : "Despesa"} de ${formatBRL(draft.amount_cents)} salva.`;
+  return { reply: `${draft.type === "income" ? "Receita" : "Despesa"} de ${formatBRL(draft.amount_cents)} salva.\n\nA visão geral deste mês já mostra o valor nos gráficos.`, place: placeAfterSave("transaction", draft) };
+}
+
+function householdPlace(metric: string) {
+  if (metric === "forecast" || metric === "can_afford") return { label: "Ver a previsão do grupo", to: "/conjunto#previsao" };
+  if (metric === "category_total") return { label: "Ver as categorias do grupo", to: "/conjunto#categorias" };
+  if (metric === "upcoming") return { label: "Ver o que ainda vem", to: "/conjunto#futuro" };
+  if (metric === "available_balance" || metric === "account_balance") return { label: "Ver o saldo do grupo", to: "/conjunto#saldos" };
+  return { label: "Ver o mês do grupo", to: "/conjunto#mes" };
+}
+
+async function answerHousehold(userId: string, email: string, text: string, today: string, res: NodeResponse): Promise<void> {
+  const bundle = await householdBundle(userId, email);
+  if (!bundle) throw new HttpError(400, "Aceite um convite para a IA olhar as contas juntas.");
+  const normalized = normalizeText(text);
+  const writing = /\b(adicione|adiciona|lanca|lancar|cadastr|recebi|gastei|paguei|comprei|transfere|transferi)\b/.test(normalized) && !isQuestion(text);
+  if (writing) {
+    sendJson(res, 200, {
+      reply: "Nesta aba eu não gravo lançamento. Cada pessoa lança na própria conta. Depois que salvar, o valor entra aqui nos gráficos do grupo.",
+      place: { label: "Lançar na minha conta", to: "/lancamentos?novo=1" },
+      confirmation: null,
+    });
+    return;
+  }
+  if (/quem gastou|quem ganhou|quem recebe|quem pagou/.test(normalized)) {
+    const lines = bundle.parts.map((part) => {
+      const model = buildDashboard(part.data, monthKey(today), today);
+      return `${part.name}: recebeu ${formatBRL(model.incomeCents)}, gastou ${formatBRL(model.spendingCents)} e ainda tem ${formatBRL(model.pendingCents)} para pagar.`;
+    });
+    const points = bundle.parts.map((part) => ({ name: part.name, totalCents: buildDashboard(part.data, monthKey(today), today).spendingCents })).filter((point) => point.totalCents > 0);
+    sendJson(res, 200, {
+      reply: ["Relatório de cada pessoa neste mês", "", ...lines, "", "O gráfico de pessoas nesta aba compara o que entrou e o que saiu."].join("\n"),
+      chart: points.length ? { title: "Gastos de cada pessoa", kind: "bars", points } : null,
+      place: { label: "Ver cada pessoa", to: "/conjunto#pessoas" },
+      confirmation: null,
+    });
+    return;
+  }
+  const forced = forcedQuery(text);
+  let query: { metric?: string | null; category_name?: string | null; account_name?: string | null; month?: string | null; months?: number | null; days?: number | null; amount_cents?: number | null; installments?: number | null; payment?: "cash" | "credit" | null; starting_on?: string | null } | null = forced
+    ? {
+        ...forced,
+        amount_cents: forced.metric === "can_afford" ? resolveAmountCents(text, null) : null,
+        installments: inferInstallments(text),
+        payment: /cart[aã]o|cr[eé]dito/i.test(text) ? "credit" : "cash",
+        months: /tr[eê]s meses/i.test(text) ? 3 : 1,
+      }
+    : null;
+  if (!query) {
+    try {
+      await consumeAiQuota(userId);
+      const intent = await interpretIntent(`Pedido sobre as contas do grupo. Não invente número e não grave lançamento.\n${text}`);
+      if (intent.action === "create_transaction" || intent.action === "create_transfer") {
+        sendJson(res, 200, {
+          reply: "Nesta aba eu não gravo lançamento. Cada pessoa lança na própria conta. Depois que salvar, o valor entra aqui nos gráficos do grupo.",
+          place: { label: "Lançar na minha conta", to: "/lancamentos?novo=1" },
+          confirmation: null,
+        });
+        return;
+      }
+      const amount = intent.query?.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query?.amount_cents;
+      query = intent.query?.metric ? { ...intent.query, amount_cents: amount } : { metric: "month_overview" };
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 429) throw error;
+      query = { metric: "month_overview" };
+    }
+  }
+  const metric = query.metric || "month_overview";
+  sendJson(res, 200, {
+    reply: `${answerQuery(query, bundle.data, today, text)}\n\nEstes números juntam só quem aceitou o grupo.`,
+    chart: chartForQuery(query, bundle.data, today, text),
+    place: householdPlace(metric),
+    confirmation: null,
+  });
+}
+
+function isQuestion(text: string): boolean {
+  if (text.includes("?")) return true;
+  const normalized = normalizeText(text);
+  return /^(quanto|qual|quais|como|posso|mostra|mostre|me mostra|me diga|explica|onde)/.test(normalized)
+    || /\b(saldo|sobra|previsao|grafico|posso comprar|gastei com|quanto tenho|quanto gastei|quanto recebi)\b/.test(normalized);
 }
 
 export async function handleAssistant(req: NodeRequest, res: NodeResponse): Promise<void> {
@@ -371,15 +453,20 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     const body = await readJson(req);
     const data = await loadData(user.token);
     if (body.mode === "confirm") {
-      const reply = await confirmDraft(user.token, body, data);
-      sendJson(res, 200, { reply, confirmation: null });
+      const saved = await confirmDraft(user.token, body, data);
+      sendJson(res, 200, { reply: saved.reply, place: saved.place, confirmation: null });
       return;
     }
     const text = String(body.text ?? "").trim();
-    const guide = body.guide === "account" || body.guide === "income" || body.guide === "paid" || body.guide === "upcoming" ? body.guide : null;
+    const asking = isQuestion(text);
+    const guide = asking ? null : body.guide === "account" || body.guide === "income" || body.guide === "paid" || body.guide === "upcoming" ? body.guide : null;
     if (text.length < 2) throw new HttpError(400, "Escreva o que você quer fazer.");
     if (text.length > 2000) throw new HttpError(400, "A mensagem pode ter no máximo 2000 caracteres.");
     const today = todayISO();
+    if (body.household === true) {
+      await answerHousehold(user.id, user.email, text, today, res);
+      return;
+    }
     const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
     const historyText = history.map((item) => {
       const entry = item as { role?: string; content?: string };
@@ -396,15 +483,15 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       const amount = forced.metric === "can_afford" ? resolveAmountCents(text, null) : null;
       const installments = inferInstallments(text);
       const category = suggestCategory(text, data.categories, "expense");
-      const reply = answerQuery({
+      const query = {
         ...forced,
         amount_cents: amount,
         installments,
         category_name: category?.name ?? null,
-        payment: /cart[aã]o|cr[eé]dito/i.test(text) ? "credit" : "cash",
+        payment: /cart[aã]o|cr[eé]dito/i.test(text) ? "credit" as const : "cash" as const,
         months: /tr[eê]s meses/i.test(text) ? 3 : /dois meses/i.test(text) ? 2 : 1,
-      }, data, today, text);
-      sendJson(res, 200, { reply, confirmation: null });
+      };
+      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), confirmation: null });
       return;
     }
     const guideNote = guide === "income"
@@ -423,8 +510,8 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     const intent = await interpretIntent(`Contexto:\n${JSON.stringify(context)}\n${guideNote}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
     if (!guide && intent.action === "query" && intent.query?.metric) {
       const amount = intent.query.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query.amount_cents;
-      const reply = answerQuery({ ...intent.query, amount_cents: amount }, data, today, text);
-      sendJson(res, 200, { reply, confirmation: null });
+      const query = { ...intent.query, amount_cents: amount };
+      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), confirmation: null });
       return;
     }
     if (!guide && intent.action === "create_transfer") {
@@ -433,10 +520,12 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     }
     if (!guide && intent.action === "chat") {
       const message = intent.message ?? "";
+      const place = placeFromText(text);
       sendJson(res, 200, {
         reply: /R\$\s*\d/.test(message)
           ? "Posso responder com os números reais dos seus lançamentos. Pergunte, por exemplo, qual é o saldo ou quanto vai sobrar no fim do mês."
-          : (message.trim() || "Posso lançar receitas e despesas e explicar seu saldo. Nada é salvo sem a sua confirmação."),
+          : `${message.trim() || "Posso lançar conta, receita, despesa, compra no cartão e transferência. Nada é salvo sem a sua confirmação."}${place ? `\n\nO que não dá para gravar por aqui está na tela indicada abaixo, com os seus dados.` : ""}`,
+        place,
         confirmation: null,
       });
       return;

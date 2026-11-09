@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { BalanceChart, CategoryChart, FlowChart } from "@/components/Charts";
+import { AnswerChart, BalanceChart, CategoryChart, FlowChart, MonthPie } from "@/components/Charts";
 import { Delta, MoneyText } from "@/components/ui";
 import { useGuide } from "@/components/GuideCoach";
 import { useFinance } from "@/context/FinanceContext";
@@ -12,8 +12,18 @@ import { statusLabel, typeLabel } from "@/lib/labels";
 
 export function DashboardPage() {
   const { data, today } = useFinance();
-  const { openGuide } = useGuide();
-  const [month, setMonth] = useState(monthKey(today));
+  const { openGuide, focusChart } = useGuide();
+  const [params] = useSearchParams();
+  const location = useLocation();
+  const requested = params.get("mes");
+  const [month, setMonth] = useState(requested && /^\d{4}-\d{2}$/.test(requested) ? requested : monthKey(today));
+  useEffect(() => {
+    const next = params.get("mes");
+    if (next && /^\d{4}-\d{2}$/.test(next)) setMonth(next);
+  }, [params]);
+  useEffect(() => {
+    if (location.hash === "#previsao") document.getElementById("previsao")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location.hash, month]);
   const model = useMemo(() => buildDashboard(data, month, today), [data, month, today]);
   const categories = topCategorySlices(model.categories);
   const ratioTone = model.committedRatio == null ? "text-muted" : model.committedRatio >= 80 ? "text-expense" : model.committedRatio >= 60 ? "text-warning" : "text-income";
@@ -32,10 +42,44 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <button className="w-full rounded-3xl bg-accent p-5 text-left text-white" onClick={openGuide} type="button">
-        <p className="text-lg font-semibold">Organizar meu mês falando</p>
-        <p className="mt-1 max-w-2xl text-sm leading-6 text-white/80">A IA pergunta onde está o dinheiro, o que já entrou, o que já foi pago e o que falta pagar. Você só responde, falando ou escrevendo.</p>
+      <button className="w-full rounded-3xl bg-accent p-6 text-left text-white shadow-2xl" onClick={openGuide} type="button">
+        <p className="text-xs font-medium uppercase tracking-wide text-white/70">Comece por aqui</p>
+        <p className="mt-1 text-2xl font-semibold">A IA monta o seu mês</p>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-white/80">Pergunte à vontade: saldo, gastos, sobra do mês ou se uma compra cabe. Ela responde com os seus números e desenha o gráfico da pergunta. Também pode contar o que entrou, o que pagou e o que ainda vai pagar.</p>
       </button>
+
+      {focusChart ? (
+        <article className="rounded-3xl border border-accent bg-surface p-5">
+          <h2 className="font-semibold">O que você perguntou</h2>
+          <AnswerChart title={focusChart.title} kind={focusChart.kind} points={focusChart.points} />
+        </article>
+      ) : null}
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <article className="rounded-3xl border border-line bg-surface p-5">
+          <h2 className="font-semibold">O mês em uma pizza</h2>
+          <p className="mb-4 mt-1 text-sm text-muted">Verde é o que já entrou. Vermelho é o que já saiu. Amarelo é o que ainda vai pagar.</p>
+          <MonthPie receivedCents={model.incomeCents} spentCents={model.spendingCents} futureCents={model.pendingCents} />
+        </article>
+        <article className="rounded-3xl border border-line bg-surface p-5">
+          <h2 className="font-semibold">Para onde o dinheiro foi</h2>
+          <p className="mb-4 mt-1 text-sm text-muted">Cada fatia é uma categoria dos gastos já pagos neste mês.</p>
+          <CategoryChart data={categories.map((item) => ({ name: item.name, totalCents: item.totalCents, color: item.color }))} />
+        </article>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <article className="rounded-3xl border border-line bg-surface p-5">
+          <h2 className="mb-1 font-semibold">Receitas e despesas</h2>
+          <p className="mb-4 text-sm text-muted">As barras comparam os meses. Verde entra, vermelho sai.</p>
+          <FlowChart data={model.history} />
+        </article>
+        <article className="rounded-3xl border border-line bg-surface p-5">
+          <h2 className="mb-1 font-semibold">Evolução do saldo</h2>
+          <p className="mb-4 text-sm text-muted">A linha contínua é o que já aconteceu. A tracejada é a projeção.</p>
+          <BalanceChart data={model.history} />
+        </article>
+      </section>
 
       {!data.accounts.length ? (
         <div className="rounded-3xl border border-line bg-surface p-5 text-sm leading-6">
@@ -91,7 +135,7 @@ export function DashboardPage() {
               : `${percentLabel(model.committedRatio)} de ${formatMoney(model.incomeBaseCents)} já estão prometidos entre contas do mês e faturas que vencem nele. Abaixo de 60% fica folgado, entre 60% e 80% aperta, e acima de 80% deixa pouco espaço para imprevisto.`}
           </p>
         </article>
-        <article className="rounded-3xl border border-line bg-surface p-5">
+        <article id="previsao" className="rounded-3xl border border-line bg-surface p-5">
           <h2 className="font-semibold">Previsão financeira</h2>
           <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
             {model.forecasts.map((item) => (
@@ -104,23 +148,6 @@ export function DashboardPage() {
           <p className="mt-3 text-xs leading-5 text-muted">Inclui lançamentos futuros, recorrências já geradas, parcelas e faturas. Transferência interna não altera esses totais.</p>
         </article>
       </section>
-
-      <section className="grid gap-4 xl:grid-cols-2">
-        <article className="rounded-3xl border border-line bg-surface p-5">
-          <h2 className="mb-4 font-semibold">Receitas e despesas</h2>
-          <FlowChart data={model.history} />
-        </article>
-        <article className="rounded-3xl border border-line bg-surface p-5">
-          <h2 className="mb-4 font-semibold">Despesas por categoria</h2>
-          <CategoryChart data={categories.map((item) => ({ name: item.name, totalCents: item.totalCents, color: item.color }))} />
-        </article>
-      </section>
-
-      <article className="rounded-3xl border border-line bg-surface p-5">
-        <h2 className="mb-4 font-semibold">Evolução do saldo</h2>
-        <BalanceChart data={model.history} />
-        <p className="mt-2 text-xs text-muted">A linha contínua é o que já aconteceu. A tracejada mostra a projeção até o fim de cada mês.</p>
-      </article>
 
       <section className="grid gap-4 lg:grid-cols-2">
         <article className="rounded-3xl border border-line bg-surface p-5">

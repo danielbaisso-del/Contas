@@ -18,8 +18,8 @@
     <script>
       (function () {
         try {
-          var theme = localStorage.getItem("contas-theme");
-          if (theme !== "light") document.documentElement.classList.add("dark");
+          var theme = localStorage.getItem("contas-theme-escolha");
+          if (theme === "dark") document.documentElement.classList.add("dark");
         } catch (e) {}
       })();
     </script>

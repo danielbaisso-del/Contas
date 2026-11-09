@@ -1,4 +1,4 @@
-import { handleAssistant } from "../server/assistant";
+import { handleAssistant } from "../api-bundle/assistant.js";
 
 export const maxDuration = 30;
 export default handleAssistant;

@@ -91,7 +91,20 @@ export type Confirmation =
   | { kind: "transfer"; title: string; lines: string[]; draft: TransferDraft }
   | { kind: "account"; title: string; lines: string[]; draft: AccountDraft };
 
+export interface AssistantChart {
+  title: string;
+  kind: "pie" | "bars";
+  points: Array<{ name: string; totalCents: number }>;
+}
+
+export interface AssistantPlace {
+  label: string;
+  to: string;
+}
+
 export interface AssistantResponse {
   reply: string;
   confirmation: Confirmation | null;
+  chart?: AssistantChart | null;
+  place?: AssistantPlace | null;
 }

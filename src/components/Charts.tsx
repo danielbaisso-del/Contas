@@ -8,11 +8,140 @@ function axis(value: number) {
 }
 
 const tooltipStyle = { background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, color: "var(--ink)" };
+const palette = ["#3ecf8e", "#f07178", "#e6b450", "#7aa7ff", "#c084fc", "#fb923c", "#22d3ee", "#f472b6"];
+
+function ColorPreview({ names }: { names: string[] }) {
+  const slices = names.length ? names : ["Já recebi", "Já paguei", "Ainda vou pagar", "Categorias"];
+  const radius = 42;
+  const turn = 2 * Math.PI * radius;
+  const slice = turn / slices.length;
+  return (
+    <div className="grid items-center gap-4 md:grid-cols-[220px_1fr]">
+      <svg viewBox="0 0 120 120" className="chart-spin mx-auto h-56 w-56" aria-hidden="true">
+        <circle cx="60" cy="60" r="28" fill="var(--surface)" />
+        {slices.map((name, index) => (
+          <circle key={name} cx="60" cy="60" r={radius} fill="none" stroke={palette[index % palette.length]} strokeWidth="18" strokeDasharray={`${slice - 4} ${turn}`} strokeDashoffset={-index * slice} strokeLinecap="butt" />
+        ))}
+      </svg>
+      <div>
+        <ul className="space-y-2">
+          {slices.map((name, index) => (
+            <li key={name} className="flex items-center gap-2 text-sm">
+              <span className="h-3 w-3 rounded-full" style={{ background: palette[index % palette.length] }} />
+              {name}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 text-xs leading-5 text-muted">As cores se movem enquanto ainda não há valor. O seu número entra no lugar desta animação.</p>
+      </div>
+    </div>
+  );
+}
+
+function BarPreview() {
+  const months = [
+    ["Mês 1", 55, 35],
+    ["Mês 2", 70, 48],
+    ["Mês 3", 46, 62],
+    ["Mês 4", 80, 40],
+  ];
+  return (
+    <div>
+      <div className="flex h-56 items-end gap-3">
+        {months.map(([label, income, expense], index) => (
+          <div key={String(label)} className="flex flex-1 flex-col items-center gap-2">
+            <div className="flex h-48 w-full items-end justify-center gap-1">
+              <div className="chart-bar w-3 rounded-t-md bg-income" style={{ height: `${income}%`, animationDelay: `${index * 0.15}s` }} />
+              <div className="chart-bar w-3 rounded-t-md bg-expense" style={{ height: `${expense}%`, animationDelay: `${index * 0.15 + 0.2}s` }} />
+            </div>
+            <span className="text-xs text-muted">{label}</span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs leading-5 text-muted">Verde é o que entra e vermelho é o que sai. Esta forma é só visual até o primeiro lançamento.</p>
+    </div>
+  );
+}
+
+function LinePreview() {
+  return (
+    <div>
+      <svg viewBox="0 0 320 140" className="h-56 w-full" aria-hidden="true">
+        <path d="M10 100 C 50 90, 70 40, 110 60 S 170 120, 210 70 S 270 20, 310 48" fill="none" stroke="#7aa7ff" strokeWidth="4" strokeLinecap="round" className="chart-draw" />
+        <path d="M10 110 C 60 100, 90 70, 140 84 S 200 130, 250 90 S 290 60, 310 72" fill="none" stroke="#e6b450" strokeWidth="4" strokeDasharray="8 8" strokeLinecap="round" />
+      </svg>
+      <p className="mt-3 text-xs leading-5 text-muted">A linha azul é o saldo já realizado e a amarela é a projeção. Elas passam a seguir os seus valores.</p>
+    </div>
+  );
+}
+
+function PieBlock({ data, emptyNames }: { data: Array<{ name: string; totalCents: number }>; emptyNames: string[] }) {
+  const total = data.reduce((sum, item) => sum + item.totalCents, 0);
+  if (!total) return <ColorPreview names={emptyNames.length ? emptyNames : data.map((item) => item.name)} />;
+  return (
+    <div className="grid items-center gap-4 md:grid-cols-[220px_1fr]">
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={data} dataKey="totalCents" nameKey="name" innerRadius={62} outerRadius={96} paddingAngle={3} stroke="transparent">
+              {data.map((item, index) => <Cell key={item.name} fill={palette[index % palette.length]} />)}
+            </Pie>
+            <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <ul className="space-y-2">
+        {data.map((item, index) => (
+          <li key={item.name} className="flex items-center justify-between gap-3 text-sm">
+            <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: palette[index % palette.length] }} />{item.name}</span>
+            <span className="tabular-nums text-muted">{formatBRL(item.totalCents)} · {Math.round((item.totalCents / total) * 100)}%</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function AnswerChart({ title, kind, points }: { title: string; kind: "pie" | "bars"; points: Array<{ name: string; totalCents: number }> }) {
+  return (
+    <div className="mt-3">
+      <p className="mb-2 text-sm font-medium text-ink">{title}</p>
+      {kind === "bars" ? (
+        points.some((item) => item.totalCents > 0) ? (
+        <div className="h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={points}>
+              <CartesianGrid stroke="var(--line)" vertical={false} />
+              <XAxis dataKey="name" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} interval={0} />
+              <YAxis stroke="var(--muted)" fontSize={11} tickFormatter={axis} tickLine={false} axisLine={false} width={52} />
+              <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
+              <Bar dataKey="totalCents" radius={[6, 6, 0, 0]}>
+                {points.map((item, index) => <Cell key={item.name} fill={palette[index % palette.length]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        ) : <BarPreview />
+      ) : <PieBlock data={points} emptyNames={points.map((item) => item.name)} />}
+    </div>
+  );
+}
+
+export function MonthPie({ receivedCents, spentCents, futureCents }: { receivedCents: number; spentCents: number; futureCents: number }) {
+  const data = [
+    { name: "Já recebi", totalCents: receivedCents },
+    { name: "Já paguei", totalCents: spentCents },
+    { name: "Ainda vou pagar", totalCents: futureCents },
+  ].filter((item) => item.totalCents > 0);
+  return <PieBlock data={data.length ? data : [
+    { name: "Já recebi", totalCents: 0 },
+    { name: "Já paguei", totalCents: 0 },
+    { name: "Ainda vou pagar", totalCents: 0 },
+  ]} emptyNames={["Já recebi", "Já paguei", "Ainda vou pagar"]} />;
+}
 
 export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: number; expenseCents: number }> }) {
-  if (!data.some((item) => item.incomeCents || item.expenseCents)) {
-    return <p className="text-sm text-muted">O gráfico de receitas e despesas aparece quando houver movimentação no período.</p>;
-  }
+  if (!data.some((item) => item.incomeCents || item.expenseCents)) return <BarPreview />;
   return (
     <div className="h-72">
       <ResponsiveContainer width="100%" height="100%">
@@ -31,23 +160,11 @@ export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: 
 }
 
 export function CategoryChart({ data }: { data: Array<{ name: string; totalCents: number; color: string }> }) {
-  if (!data.length) return <p className="text-sm text-muted">As despesas por categoria aparecem depois dos primeiros gastos pagos ou compras no cartão.</p>;
-  return (
-    <div className="h-72">
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie data={data} dataKey="totalCents" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={2}>
-            {data.map((item) => <Cell key={item.name} fill={item.color} />)}
-          </Pie>
-          <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
-          <Legend />
-        </PieChart>
-      </ResponsiveContainer>
-    </div>
-  );
+  return <PieBlock data={data.map((item) => ({ name: item.name, totalCents: item.totalCents }))} emptyNames={["Mercado", "Moradia", "Transporte", "Lazer"]} />;
 }
 
 export function BalanceChart({ data }: { data: Array<{ label: string; balanceCents: number; projectedCents: number }> }) {
+  if (!data.some((item) => item.balanceCents || item.projectedCents)) return <LinePreview />;
   return (
     <div className="h-72">
       <ResponsiveContainer width="100%" height="100%">

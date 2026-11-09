@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/bundle-api.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "postinstall": "node scripts/use-wasm-rollup.mjs"

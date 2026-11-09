@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Button, EmptyState, Field, Input, Modal, MoneyField, MoneyText, PageHeader, Select } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
@@ -11,6 +12,8 @@ import type { Account, AccountType } from "@/types/models";
 
 export function AccountsPage() {
   const { data, today } = useFinance();
+  const [params] = useSearchParams();
+  const focus = params.get("conta");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
   const [transfer, setTransfer] = useState(false);
@@ -24,7 +27,7 @@ export function AccountsPage() {
       </article>
       {!data.accounts.length ? <EmptyState title="Nenhuma conta ainda" text="Cadastre o banco principal, uma carteira digital ou o dinheiro em espécie. Se você vai lançar o histórico depois, use como saldo inicial o valor anterior ao primeiro lançamento." /> : (
         <div className="grid gap-4 md:grid-cols-2">
-          {data.accounts.map((account) => <AccountCard key={account.id} account={account} onEdit={() => { setEditing(account); setOpen(true); }} />)}
+          {data.accounts.map((account) => <AccountCard key={account.id} account={account} highlighted={focus === account.id} onEdit={() => { setEditing(account); setOpen(true); }} />)}
         </div>
       )}
       {open ? <AccountModal account={editing} onClose={() => setOpen(false)} /> : null}
@@ -33,12 +36,15 @@ export function AccountsPage() {
   );
 }
 
-function AccountCard({ account, onEdit }: { account: Account; onEdit: () => void }) {
+function AccountCard({ account, onEdit, highlighted = false }: { account: Account; onEdit: () => void; highlighted?: boolean }) {
   const { data, today, refresh } = useFinance();
   const toast = useToast();
   const balance = accountBalance(account, data.transactions, today);
+  useEffect(() => {
+    if (highlighted) document.getElementById(`conta-${account.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [account.id, highlighted]);
   return (
-    <article className="rounded-3xl border border-line bg-surface p-5">
+    <article id={`conta-${account.id}`} className={`rounded-3xl border bg-surface p-5 ${highlighted ? "border-accent ring-2 ring-accent" : "border-line"}`}>
       <div className="flex items-start justify-between"><div><p className="font-semibold">{account.name}</p><p className="text-xs text-muted">{account.institution || "Sem instituição"} · {accountTypeLabel(account.type)}</p></div><span className="h-3 w-3 rounded-full" style={{ background: account.color }} /></div>
       <p className="mt-4 text-2xl font-semibold"><MoneyText cents={balance} tone="auto" /></p>
       <p className="mt-2 text-xs text-muted">Saldo inicial: <MoneyText cents={account.initialBalanceCents} /></p>

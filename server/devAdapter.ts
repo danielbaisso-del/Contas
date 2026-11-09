@@ -22,3 +22,4 @@ loadLocalEnv();
 export { handleAssistant } from "./assistant";
 export { handleCategorize } from "./categorize";
 export { handleAdmin } from "./admin";
+export { handleHousehold } from "./household";

@@ -1,19 +1,57 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Button, Field, Input, MoneyField, MoneyText, PageHeader, Select } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import { simulatePurchase, type SimulationResult } from "@/finance/engine";
 import { formatDateBR, todayISO } from "@/lib/dates";
 import { percentLabel } from "@/lib/money";
+import type { FinanceData } from "@/types/models";
+
+function simulationFromQuery(params: URLSearchParams, data: FinanceData, today: string): { amount: number | null; count: number; date: string; mode: "cash" | "credit"; result: SimulationResult | null } {
+  const raw = Number(params.get("valor"));
+  const amount = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : null;
+  const count = Math.min(48, Math.max(1, Number(params.get("parcelas")) || 1));
+  const date = params.get("data") && /^\d{4}-\d{2}-\d{2}$/.test(params.get("data") ?? "") ? params.get("data")! : todayISO();
+  const mode = params.get("forma") === "credit" ? "credit" : "cash";
+  if (!amount) return { amount, count, date, mode, result: null };
+  const card = data.cards.find((item) => !item.archived);
+  return {
+    amount,
+    count,
+    date,
+    mode,
+    result: simulatePurchase({
+      data,
+      today,
+      totalCents: amount,
+      count,
+      firstDate: date,
+      mode,
+      closingDay: card?.closingDay ?? 28,
+      dueDay: card?.dueDay ?? 5,
+    }),
+  };
+}
 
 export function SimulatorPage() {
   const { data, today } = useFinance();
+  const [params] = useSearchParams();
+  const seeded = useMemo(() => simulationFromQuery(params, data, today), [data, params, today]);
   const [name, setName] = useState("");
-  const [amount, setAmount] = useState<number | null>(null);
-  const [count, setCount] = useState(1);
-  const [date, setDate] = useState(todayISO());
-  const [mode, setMode] = useState<"cash" | "credit">("cash");
+  const [amount, setAmount] = useState<number | null>(seeded.amount);
+  const [count, setCount] = useState(seeded.count);
+  const [date, setDate] = useState(seeded.date);
+  const [mode, setMode] = useState<"cash" | "credit">(seeded.mode);
   const [cardId, setCardId] = useState("");
-  const [result, setResult] = useState<SimulationResult | null>(null);
+  const [result, setResult] = useState<SimulationResult | null>(seeded.result);
+  useEffect(() => {
+    if (!params.get("valor")) return;
+    setAmount(seeded.amount);
+    setCount(seeded.count);
+    setDate(seeded.date);
+    setMode(seeded.mode);
+    setResult(seeded.result);
+  }, [params, seeded]);
   const card = data.cards.find((item) => item.id === cardId);
 
   function run() {

@@ -28,14 +28,28 @@ export function TransactionsPage() {
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [open, setOpen] = useState(params.get("novo") === "1");
   const [categoriesOpen, setCategoriesOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [kind, setKind] = useState("all");
-  const [status, setStatus] = useState("all");
-  const [categoryId, setCategoryId] = useState("");
-  const [accountId, setAccountId] = useState("");
-  const [method, setMethod] = useState("");
-  const [start, setStart] = useState(`${today.slice(0, 7)}-01`);
-  const [end, setEnd] = useState(today.slice(0, 8) + String(new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0).getDate()).padStart(2, "0"));
+  const [query, setQuery] = useState(params.get("q") ?? "");
+  const [kind, setKind] = useState(params.get("tipo") ?? "all");
+  const [status, setStatus] = useState(params.get("status") ?? "");
+  const [categoryId, setCategoryId] = useState(params.get("categoria") ?? "");
+  const [accountId, setAccountId] = useState(params.get("conta") ?? "");
+  const [method, setMethod] = useState(params.get("forma") ?? "");
+  const [start, setStart] = useState(params.get("inicio") ?? `${today.slice(0, 7)}-01`);
+  const [end, setEnd] = useState(params.get("fim") ?? today.slice(0, 8) + String(new Date(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0).getDate()).padStart(2, "0"));
+  useEffect(() => {
+    const inicio = params.get("inicio");
+    const fim = params.get("fim");
+    const tipo = params.get("tipo");
+    if (inicio) setStart(inicio);
+    if (fim) setEnd(fim);
+    if (tipo) setKind(tipo);
+    if (params.has("status")) setStatus(params.get("status") ?? "");
+    if (params.has("categoria")) setCategoryId(params.get("categoria") ?? "");
+    if (params.has("conta")) setAccountId(params.get("conta") ?? "");
+    if (params.has("forma")) setMethod(params.get("forma") ?? "");
+    if (params.has("q")) setQuery(params.get("q") ?? "");
+    setPage(1);
+  }, [params]);
   const [page, setPage] = useState(1);
 
   useEffect(() => { if (params.get("novo") === "1") setOpen(true); }, [params]);

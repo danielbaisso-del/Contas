@@ -13,7 +13,13 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
   });
-  const payload = (await response.json().catch(() => ({}))) as { error?: string };
+  const raw = await response.text();
+  let payload: { error?: string } = {};
+  try {
+    payload = raw ? (JSON.parse(raw) as { error?: string }) : {};
+  } catch {
+    throw new Error("A IA não respondeu neste site. Na Vercel, confira GEMINI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY e SUPABASE_SERVICE_ROLE_KEY, depois publique de novo.");
+  }
   if (!response.ok) throw new Error(payload.error || "A IA não conseguiu concluir o pedido.");
   return payload as T;
 }

@@ -1,18 +1,21 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { Bot, CalendarDays, CircleHelp, CreditCard, FileUp, Landmark, LayoutDashboard, LogOut, Menu, Moon, PieChart, Plus, RefreshCw, Repeat, Shield, Sparkles, Sun, Target, Wallet, X } from "lucide-react";
+import { Bot, CalendarDays, CircleHelp, CreditCard, FileUp, Landmark, LayoutDashboard, LogOut, Menu, Moon, PieChart, Plus, RefreshCw, Repeat, Shield, Sparkles, Sun, Target, Users, Wallet, X } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useFinance } from "@/context/FinanceContext";
 import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
 import { checkAdmin } from "@/services/admin";
+import { loadHousehold, respondInvite, type HouseholdInvite } from "@/services/household";
 import { saveProfileName } from "@/services/data";
 import { supabase } from "@/services/supabase";
 import { GuideProvider } from "@/components/GuideCoach";
 import { Button, Field, Input, Modal } from "@/components/ui";
-import { cx } from "@/lib/utils";
+import { cx, errorMessage } from "@/lib/utils";
 
 const items = [
   { to: "/", label: "Visão geral", icon: LayoutDashboard, end: true },
+  { to: "/conjunto", label: "Juntos", icon: Users },
   { to: "/lancamentos", label: "Lançamentos", icon: Wallet },
   { to: "/contas", label: "Contas", icon: Landmark },
   { to: "/cartoes", label: "Cartões", icon: CreditCard },
@@ -31,10 +34,14 @@ export function AppLayout() {
   const { profile, refresh, loading, error } = useFinance();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [admin, setAdmin] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [name, setName] = useState(profile?.fullName ?? "");
+  const [invites, setInvites] = useState<HouseholdInvite[]>([]);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   useEffect(() => {
     if (!session) {
@@ -42,7 +49,12 @@ export function AppLayout() {
       return;
     }
     void checkAdmin().then(setAdmin).catch(() => setAdmin(false));
-  }, [session]);
+    void loadHousehold().then((summary) => {
+      setInvites(summary.invites);
+      const seen = sessionStorage.getItem("contas-household-invite") ?? "";
+      if (summary.invites.some((invite) => !seen.includes(invite.id))) setInviteOpen(true);
+    }).catch(() => setInvites([]));
+  }, [session, location.pathname]);
 
   async function logout() {
     await supabase.auth.signOut();
@@ -63,6 +75,7 @@ export function AppLayout() {
           <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setOpen(false)} className={({ isActive }) => cx("flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm", isActive ? "bg-sidebar-active text-white" : "text-sidebar-muted hover:bg-white/5 hover:text-sidebar-ink")}>
             <item.icon size={18} />
             {item.label}
+            {item.to === "/conjunto" && invites.length ? <span className="ml-auto rounded-full bg-accent px-2 py-0.5 text-[10px] text-white">novo</span> : null}
           </NavLink>
         ))}
       </nav>
@@ -94,6 +107,22 @@ export function AppLayout() {
           {!loading && !error ? <div className="rise"><Outlet /></div> : null}
         </main>
       </div>
+      {inviteOpen && invites.length ? (
+        <Modal title="Pedido para juntar as contas" onClose={() => { sessionStorage.setItem("contas-household-invite", invites.map((invite) => invite.id).join(",")); setInviteOpen(false); }}>
+          <div className="space-y-4">
+            {invites.map((invite) => (
+              <div key={invite.id} className="space-y-3 text-sm leading-6">
+                <p><strong>{invite.fromName}</strong>{invite.fromEmail ? ` (${invite.fromEmail})` : ""} quer ver com você os ganhos, os gastos e as contas futuras.</p>
+                <p className="text-muted">Se você aceitar, os dois passam a ter a aba Juntos. Sua conta pessoal continua separada, e cada pessoa lança no próprio acesso.</p>
+                <div className="flex gap-2">
+                  <Button onClick={async () => { try { await respondInvite(invite.id, "accept"); setInvites((current) => current.filter((item) => item.id !== invite.id)); setInviteOpen(false); navigate("/conjunto"); } catch (caught) { toast(errorMessage(caught), "error"); } }}>Aceitar</Button>
+                  <Button variant="secondary" onClick={async () => { try { await respondInvite(invite.id, "decline"); setInvites((current) => current.filter((item) => item.id !== invite.id)); setInviteOpen(false); } catch (caught) { toast(errorMessage(caught), "error"); } }}>Recusar</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      ) : null}
       {profileOpen ? (
         <Modal title="Sua conta" onClose={() => setProfileOpen(false)}>
           <form className="space-y-4" onSubmit={async (event) => { event.preventDefault(); await saveProfileName(name); await refresh(); setProfileOpen(false); }}>

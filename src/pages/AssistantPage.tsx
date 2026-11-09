@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { AnswerChart } from "@/components/Charts";
+import { PlaceLink } from "@/components/PlaceLink";
 import { Button, Field, Input, MoneyField, PageHeader, Select } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
-import type { AssistantResponse, Confirmation, TransactionDraft, TransferDraft } from "@/domain/assistant";
+import type { AssistantChart, AssistantPlace, AssistantResponse, Confirmation, TransactionDraft, TransferDraft } from "@/domain/assistant";
 import { planCardInstallments } from "@/finance/installments";
 import { formatDateBR } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
@@ -15,6 +17,8 @@ interface ChatItem {
   role: "user" | "assistant";
   content: string;
   confirmation: Confirmation | null;
+  chart: AssistantChart | null;
+  place: AssistantPlace | null;
 }
 
 export function AssistantPage() {
@@ -26,7 +30,7 @@ export function AssistantPage() {
 
   useEffect(() => {
     void loadAssistantMessages().then((messages) => {
-      setItems(messages.map((message) => ({ id: message.id, role: message.role, content: message.content, confirmation: null })));
+      setItems(messages.map((message) => ({ id: message.id, role: message.role, content: message.content, confirmation: null, chart: null, place: null })));
     }).catch(() => undefined);
   }, []);
 
@@ -35,13 +39,13 @@ export function AssistantPage() {
     if (!content) return;
     setText("");
     const history = items.slice(-6).map((item) => ({ role: item.role, content: item.content }));
-    setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null }]);
+    setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null, chart: null, place: null }]);
     setLoading(true);
     try {
       await saveAssistantMessage("user", content);
       const response = await askAssistant({ mode: "interpret", text: content, history });
       await saveAssistantMessage("assistant", response.reply, response.confirmation);
-      setItems((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: response.reply, confirmation: response.confirmation }]);
+      setItems((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: response.reply, confirmation: response.confirmation, chart: response.chart ?? null, place: response.place ?? null }]);
     } catch (error) {
       toast(errorMessage(error), "error");
     } finally { setLoading(false); }
@@ -52,7 +56,7 @@ export function AssistantPage() {
     try {
       const response: AssistantResponse = await askAssistant({ mode: "confirm", kind: confirmation.kind, draft: confirmation.draft });
       await saveAssistantMessage("assistant", response.reply);
-      setItems((current) => current.map((item) => item.id === itemId ? { ...item, confirmation: null } : item).concat({ id: crypto.randomUUID(), role: "assistant", content: response.reply, confirmation: null }));
+      setItems((current) => current.map((item) => item.id === itemId ? { ...item, confirmation: null } : item).concat({ id: crypto.randomUUID(), role: "assistant", content: response.reply, confirmation: null, chart: null, place: response.place ?? null }));
       await refresh();
     } catch (error) { toast(errorMessage(error), "error"); } finally { setLoading(false); }
   }
@@ -65,13 +69,15 @@ export function AssistantPage() {
           {!items.length ? <p className="text-sm leading-6 text-muted">Experimente: “Recebi R$ 1.500 de um cliente”, “ontem gastei R$ 85 no supermercado” ou “quanto vai sobrar no fim do mês?”.</p> : null}
           {items.map((item) => (
             <div key={item.id} className={`max-w-3xl rounded-2xl px-4 py-3 text-sm leading-6 ${item.role === "user" ? "ml-auto bg-accent text-white" : "bg-surface-2"}`}>
-              <p>{item.content}</p>
+              <p className="whitespace-pre-line">{item.content}</p>
+              {item.chart ? <AnswerChart title={item.chart.title} kind={item.chart.kind} points={item.chart.points} /> : null}
+              {item.place ? <PlaceLink place={item.place} /> : null}
               {item.confirmation ? <ConfirmationCard confirmation={item.confirmation} disabled={loading} onConfirm={(next) => void confirm(item.id, next)} /> : null}
             </div>
           ))}
         </div>
         <div className="flex gap-2">
-          <Input value={text} placeholder="Escreva seu lançamento ou sua pergunta" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void send(); }} />
+          <Input value={text} placeholder="Pergunte ou conte um lançamento. Exemplo: quanto gastei com mercado?" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void send(); }} />
           <Button loading={loading} onClick={() => void send()}>Enviar</Button>
         </div>
       </div>

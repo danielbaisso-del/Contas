@@ -99,9 +99,67 @@ body {
   animation: attention 1.8s ease-out infinite;
 }
 
+@keyframes chart-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes chart-bar {
+  from {
+    transform: scaleY(0.35);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.chart-spin {
+  transform-origin: center;
+  animation: chart-spin 16s linear infinite;
+}
+
+.chart-bar {
+  transform-origin: bottom;
+  animation: chart-bar 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes chart-draw {
+  from {
+    stroke-dashoffset: 48;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.chart-draw {
+  stroke-dasharray: 10 8;
+  animation: chart-draw 2.2s ease-in-out infinite alternate;
+}
+
+@keyframes report-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.report-line {
+  animation: report-in 0.55s ease both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rise,
-  .attention {
+  .attention,
+  .chart-spin,
+  .chart-bar,
+  .chart-draw,
+  .report-line {
     animation: none;
   }
 }

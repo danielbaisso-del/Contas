@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { FlowChart } from "@/components/Charts";
 import { Button, MoneyText, PageHeader } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
@@ -10,8 +11,16 @@ import { typeLabel } from "@/lib/labels";
 
 export function ReportsPage() {
   const { data, today } = useFinance();
-  const [from, setFrom] = useState(shiftMonth(currentMonth(today), -5));
-  const [to, setTo] = useState(currentMonth(today));
+  const [params] = useSearchParams();
+  const foco = (params.get("foco") ?? "").toLocaleLowerCase("pt-BR");
+  const [from, setFrom] = useState(params.get("de") && /^\d{4}-\d{2}$/.test(params.get("de") ?? "") ? params.get("de")! : shiftMonth(currentMonth(today), -5));
+  const [to, setTo] = useState(params.get("ate") && /^\d{4}-\d{2}$/.test(params.get("ate") ?? "") ? params.get("ate")! : currentMonth(today));
+  useEffect(() => {
+    const start = params.get("de");
+    const end = params.get("ate");
+    if (start && /^\d{4}-\d{2}$/.test(start)) setFrom(start);
+    if (end && /^\d{4}-\d{2}$/.test(end)) setTo(end);
+  }, [params]);
   const report = useMemo(() => buildReport(data, from, to, today), [data, from, to, today]);
 
   function exportCsv() {
@@ -31,7 +40,7 @@ export function ReportsPage() {
       </div>
       <article className="rounded-3xl border border-line bg-surface p-5"><h2 className="mb-4 font-semibold">Receitas e despesas por mês</h2><FlowChart data={report.months} /></article>
       <section className="grid gap-4 lg:grid-cols-2">
-        <ReportTable title="Despesas por categoria" rows={report.categories.map((item) => [item.name, formatBRL(item.totalCents)])} />
+        <ReportTable title="Despesas por categoria" focus={foco} rows={report.categories.map((item) => [item.name, formatBRL(item.totalCents)])} />
         <ReportTable title="Gastos por cartão" rows={report.cards.map((item) => [item.name, formatBRL(item.totalCents)])} />
         <ReportTable title="Movimento por conta" rows={report.accounts.map((item) => [`${item.name} · saldo ${formatBRL(item.balanceCents)}`, `entrou ${formatBRL(item.incomeCents)} · saiu ${formatBRL(item.expenseCents)}`])} />
         <article className="rounded-3xl border border-line bg-surface p-5 text-sm leading-6">
@@ -46,11 +55,14 @@ export function ReportsPage() {
   );
 }
 
-function ReportTable({ title, rows }: { title: string; rows: string[][] }) {
+function ReportTable({ title, rows, focus = "" }: { title: string; rows: string[][]; focus?: string }) {
   return (
     <article className="rounded-3xl border border-line bg-surface p-5">
       <h2 className="font-semibold">{title}</h2>
-      <div className="mt-3 space-y-2 text-sm">{rows.length ? rows.map((row) => <p key={row.join()} className="flex justify-between gap-3"><span>{row[0]}</span><span className="text-right text-muted">{row[1]}</span></p>) : <p className="text-muted">Sem dados no período.</p>}</div>
+      <div className="mt-3 space-y-2 text-sm">{rows.length ? rows.map((row) => {
+        const marked = focus && row[0].toLocaleLowerCase("pt-BR") === focus;
+        return <p key={row.join()} className={`flex justify-between gap-3 rounded-xl px-2 py-1 ${marked ? "bg-accent text-white" : ""}`}><span>{row[0]}</span><span className={`text-right ${marked ? "text-white" : "text-muted"}`}>{row[1]}</span></p>;
+      }) : <p className="text-muted">Sem dados no período.</p>}</div>
     </article>
   );
 }

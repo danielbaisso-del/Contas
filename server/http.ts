@@ -28,17 +28,22 @@ export function readHeader(req: NodeRequest, name: string): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
+function jsonRecord(value: string): Record<string, unknown> {
+  if (!value.trim()) return {};
+  if (value.length > 60_000) throw new HttpError(413, "O pedido está grande demais.");
+  return JSON.parse(value) as Record<string, unknown>;
+}
+
 export async function readJson(req: NodeRequest): Promise<Record<string, unknown>> {
   try {
-    if (typeof req.body === "string") return req.body ? (JSON.parse(req.body) as Record<string, unknown>) : {};
-    if (req.body && typeof req.body === "object") return req.body as Record<string, unknown>;
+    if (typeof req.body === "string") return jsonRecord(req.body);
+    if (typeof Buffer !== "undefined" && Buffer.isBuffer(req.body)) return jsonRecord(req.body.toString("utf8"));
+    if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) return req.body as Record<string, unknown>;
     const chunks: Buffer[] = [];
     for await (const chunk of req as unknown as AsyncIterable<Uint8Array | string>) {
       chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
     }
-    const raw = Buffer.concat(chunks).toString("utf8");
-    if (raw.length > 60_000) throw new HttpError(413, "O pedido está grande demais.");
-    return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    return jsonRecord(Buffer.concat(chunks).toString("utf8"));
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(400, "Não consegui ler o pedido.");

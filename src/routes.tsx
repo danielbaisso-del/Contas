@@ -10,6 +10,7 @@ import { CalendarPage } from "@/pages/CalendarPage";
 import { CardsPage, CardDetailPage } from "@/pages/CardsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { GoalsPage } from "@/pages/GoalsPage";
+import { HouseholdPage } from "@/pages/HouseholdPage";
 import { HelpPage } from "@/pages/HelpPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { RecurrencesPage } from "@/pages/RecurrencesPage";
@@ -41,6 +42,7 @@ export function AppRoutes() {
       <Route path="/redefinir-senha" element={<ResetPasswordPage />} />
       <Route element={<Private><FinanceProvider><AppLayout /></FinanceProvider></Private>}>
         <Route index element={<DashboardPage />} />
+        <Route path="conjunto" element={<HouseholdPage />} />
         <Route path="lancamentos" element={<TransactionsPage />} />
         <Route path="contas" element={<AccountsPage />} />
         <Route path="cartoes" element={<CardsPage />} />
