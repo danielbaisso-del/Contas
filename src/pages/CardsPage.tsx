@@ -18,7 +18,7 @@ export function CardsPage() {
   const [editing, setEditing] = useState<CreditCard | null>(null);
   return (
     <div>
-      <PageHeader title="Cartões" description="A compra compromete o limite e entra na fatura. O dinheiro da conta só sai quando a fatura é paga." action={<Button onClick={() => { setEditing(null); setOpen(true); }}>Novo cartão</Button>} />
+      <PageHeader title="Cartões" description="Cadastre o cartão, o limite total, o fechamento e o vencimento. Ao abrir, lance compras parceladas e veja o histórico das faturas. O dinheiro da conta só sai quando a fatura é paga." action={<Button onClick={() => { setEditing(null); setOpen(true); }}>Novo cartão</Button>} />
       {!data.cards.length ? <EmptyState title="Nenhum cartão" text="Cadastre o limite, o dia de fechamento e o dia de vencimento. As parcelas serão distribuídas nas faturas certas." /> : (
         <div className="grid gap-4 md:grid-cols-2">
           {data.cards.map((card) => {
@@ -29,8 +29,9 @@ export function CardsPage() {
               <article key={card.id} className="rounded-3xl border border-line bg-surface p-5">
                 <div className="flex justify-between"><div><p className="font-semibold">{card.name}</p><p className="text-xs text-muted">{card.bank || "Sem banco"} · fecha dia {card.closingDay} · vence dia {card.dueDay}</p></div><span className="h-3 w-3 rounded-full" style={{ background: card.color }} /></div>
                 <div className="mt-4 h-2 overflow-hidden rounded-full bg-surface-2"><div className="h-full bg-accent" style={{ width: `${card.limitCents ? Math.min(100, (used / card.limitCents) * 100) : 0}%` }} /></div>
-                <p className="mt-3 text-sm">Limite disponível: <MoneyText cents={available} tone={available < 0 ? "expense" : "income"} /></p>
-                <p className="text-xs text-muted">Comprometido, incluindo parcelas futuras: {formatBRL(used)}. Faturas em aberto: {formatBRL(openInvoice)}.</p>
+                <p className="mt-3 text-sm">Limite total: <MoneyText cents={card.limitCents} /></p>
+                <p className="text-sm">Limite disponível: <MoneyText cents={available} tone={available < 0 ? "expense" : "income"} /></p>
+                <p className="text-xs text-muted">Usado, com parcelas futuras: {formatBRL(used)}. Faturas em aberto: {formatBRL(openInvoice)}.</p>
                 <div className="mt-4 flex gap-2"><Link className="rounded-xl bg-accent px-4 py-2 text-sm text-white" to={`/cartoes/${card.id}`}>Abrir</Link><Button variant="secondary" onClick={() => { setEditing(card); setOpen(true); }}>Editar</Button></div>
               </article>
             );

@@ -1,4 +1,4 @@
-import { Cell, Pie, PieChart, Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Cell, Pie, PieChart, Bar, BarChart, CartesianGrid, LabelList, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { formatBRL } from "@/lib/money";
 
 function axis(value: number) {
@@ -75,26 +75,34 @@ function LinePreview() {
   );
 }
 
-function PieBlock({ data, emptyNames }: { data: Array<{ name: string; totalCents: number }>; emptyNames: string[] }) {
+function PieBlock({ data, emptyNames, keepZeros = false }: { data: Array<{ name: string; totalCents: number; color?: string }>; emptyNames: string[]; keepZeros?: boolean }) {
   const total = data.reduce((sum, item) => sum + item.totalCents, 0);
   if (!total) return <ColorPreview names={emptyNames.length ? emptyNames : data.map((item) => item.name)} />;
+  const pie = data.filter((item) => item.totalCents > 0);
+  const legend = keepZeros ? data : pie;
   return (
-    <div className="grid items-center gap-4 md:grid-cols-[220px_1fr]">
-      <div className="h-64">
+    <div className="grid items-center gap-4 md:grid-cols-[240px_1fr]">
+      <div className="relative h-64">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Pie data={data} dataKey="totalCents" nameKey="name" innerRadius={62} outerRadius={96} paddingAngle={3} stroke="transparent">
-              {data.map((item, index) => <Cell key={item.name} fill={palette[index % palette.length]} />)}
+            <Pie data={pie} dataKey="totalCents" nameKey="name" innerRadius={68} outerRadius={96} paddingAngle={3} stroke="transparent">
+              {pie.map((item, index) => <Cell key={item.name} fill={item.color || palette[index % palette.length]} />)}
             </Pie>
             <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
           </PieChart>
         </ResponsiveContainer>
+        <div className="pointer-events-none absolute inset-0 grid place-items-center">
+          <div className="text-center">
+            <p className="text-xs text-muted">Total</p>
+            <p className="text-base font-semibold tabular-nums">{formatBRL(total)}</p>
+          </div>
+        </div>
       </div>
       <ul className="space-y-2">
-        {data.map((item, index) => (
+        {legend.map((item, index) => (
           <li key={item.name} className="flex items-center justify-between gap-3 text-sm">
-            <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: palette[index % palette.length] }} />{item.name}</span>
-            <span className="tabular-nums text-muted">{formatBRL(item.totalCents)} · {Math.round((item.totalCents / total) * 100)}%</span>
+            <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: item.color || palette[index % palette.length] }} />{item.name}</span>
+            <span className="font-semibold tabular-nums">{formatBRL(item.totalCents)} · {total ? Math.round((item.totalCents / total) * 100) : 0}%</span>
           </li>
         ))}
       </ul>
@@ -117,6 +125,7 @@ export function AnswerChart({ title, kind, points }: { title: string; kind: "pie
               <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
               <Bar dataKey="totalCents" radius={[6, 6, 0, 0]}>
                 {points.map((item, index) => <Cell key={item.name} fill={palette[index % palette.length]} />)}
+                <LabelList dataKey="totalCents" position="top" formatter={(value: number) => formatBRL(Number(value))} style={{ fill: "var(--ink)", fontSize: 11 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -132,23 +141,22 @@ export function MonthPie({ receivedCents, spentCents, futureCents }: { receivedC
     { name: "Já recebi", totalCents: receivedCents },
     { name: "Já paguei", totalCents: spentCents },
     { name: "Ainda vou pagar", totalCents: futureCents },
-  ].filter((item) => item.totalCents > 0);
-  return <PieBlock data={data.length ? data : [
-    { name: "Já recebi", totalCents: 0 },
-    { name: "Já paguei", totalCents: 0 },
-    { name: "Ainda vou pagar", totalCents: 0 },
-  ]} emptyNames={["Já recebi", "Já paguei", "Ainda vou pagar"]} />;
+  ];
+  return <PieBlock data={data} emptyNames={["Já recebi", "Já paguei", "Ainda vou pagar"]} keepZeros />;
 }
 
 export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: number; expenseCents: number }> }) {
-  if (!data.some((item) => item.incomeCents || item.expenseCents)) return <BarPreview />;
+  if (!data.length) return <BarPreview />;
+  const latest = data[data.length - 1];
+  const peak = Math.max(1, ...data.flatMap((item) => [item.incomeCents, item.expenseCents]));
   return (
+    <div>
     <div className="h-72">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data}>
           <CartesianGrid stroke="var(--line)" vertical={false} />
           <XAxis dataKey="label" stroke="var(--muted)" fontSize={12} tickLine={false} axisLine={false} />
-          <YAxis stroke="var(--muted)" fontSize={12} tickFormatter={axis} tickLine={false} axisLine={false} width={56} />
+          <YAxis stroke="var(--muted)" fontSize={12} tickFormatter={axis} tickLine={false} axisLine={false} width={56} domain={[0, peak]} />
           <Tooltip formatter={(value: number, name: string) => [formatBRL(Number(value)), name === "incomeCents" ? "Receitas" : "Despesas"]} contentStyle={tooltipStyle} />
           <Legend formatter={(value) => (value === "incomeCents" ? "Receitas recebidas" : "Despesas do mês")} />
           <Bar dataKey="incomeCents" fill="var(--income)" radius={[6, 6, 0, 0]} />
@@ -156,16 +164,51 @@ export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: 
         </BarChart>
       </ResponsiveContainer>
     </div>
+      <p className="mt-3 text-sm">No mês mais recente, {latest?.label}: <strong className="text-income">{formatBRL(latest?.incomeCents ?? 0)}</strong> entraram e <strong className="text-expense">{formatBRL(latest?.expenseCents ?? 0)}</strong> saíram.</p>
+      <div className="mt-2 divide-y divide-line text-sm">
+        {data.map((item) => (
+          <p key={item.label} className="flex justify-between gap-3 py-1.5"><span>{item.label}</span><span>{formatBRL(item.incomeCents)} entrou · {formatBRL(item.expenseCents)} saiu</span></p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function SeriesChart({ data, dataKey, color, caption }: { data: Array<{ label: string; incomeCents: number; expenseCents: number }>; dataKey: "incomeCents" | "expenseCents"; color: string; caption: string }) {
+  const latest = data[data.length - 1];
+  if (!data.length) return <BarPreview />;
+  const peak = Math.max(1, ...data.map((item) => Number(item[dataKey])));
+  return (
+    <div>
+      <div className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data}>
+            <CartesianGrid stroke="var(--line)" vertical={false} />
+            <XAxis dataKey="label" stroke="var(--muted)" fontSize={12} tickLine={false} axisLine={false} />
+            <YAxis stroke="var(--muted)" fontSize={12} tickFormatter={axis} tickLine={false} axisLine={false} width={56} domain={[0, peak]} />
+            <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
+            <Bar dataKey={dataKey} fill={color} radius={[6, 6, 0, 0]}>
+              <LabelList dataKey={dataKey} position="top" formatter={(value: number) => formatBRL(Number(value))} style={{ fill: "var(--ink)", fontSize: 11 }} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="mt-3 text-sm">{caption} <strong>{formatBRL(Number(latest?.[dataKey] ?? 0))}</strong>.</p>
+    </div>
   );
 }
 
 export function CategoryChart({ data }: { data: Array<{ name: string; totalCents: number; color: string }> }) {
-  return <PieBlock data={data.map((item) => ({ name: item.name, totalCents: item.totalCents }))} emptyNames={["Mercado", "Moradia", "Transporte", "Lazer"]} />;
+  const slices = data.filter((item) => item.totalCents > 0);
+  if (!slices.length) return <p className="text-sm leading-6 text-muted">Nenhuma despesa neste período. Quando você lançar uma, a categoria entra nesta pizza com o valor.</p>;
+  return <PieBlock data={slices.map((item) => ({ name: item.name, totalCents: item.totalCents, color: item.color }))} emptyNames={[]} />;
 }
 
 export function BalanceChart({ data }: { data: Array<{ label: string; balanceCents: number; projectedCents: number }> }) {
   if (!data.some((item) => item.balanceCents || item.projectedCents)) return <LinePreview />;
+  const latest = data[data.length - 1];
   return (
+    <div>
     <div className="h-72">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
@@ -178,6 +221,8 @@ export function BalanceChart({ data }: { data: Array<{ label: string; balanceCen
           <Line type="monotone" dataKey="projectedCents" stroke="var(--warning)" strokeWidth={2.4} strokeDasharray="5 5" dot={false} />
         </LineChart>
       </ResponsiveContainer>
+    </div>
+      <p className="mt-3 text-sm">Saldo realizado mais recente: <strong>{formatBRL(latest?.balanceCents ?? 0)}</strong>. Projeção: <strong>{formatBRL(latest?.projectedCents ?? 0)}</strong>.</p>
     </div>
   );
 }

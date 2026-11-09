@@ -159,7 +159,7 @@ export function monthlyHistory(data: FinanceData, month: string, today: string, 
     const isFuture = key > monthKey(today);
     points.push({
       month: key,
-      label: formatMonthShort(key),
+      label: `${formatMonthShort(key)}/${key.slice(2, 4)}`,
       incomeCents: monthIncome(data.transactions, key, "received"),
       expenseCents: monthSpending(data.transactions, key),
       balanceCents: totalBalance(data.accounts, data.transactions, isCurrent ? today : range.end),
@@ -181,7 +181,6 @@ export function expensesByCategory(data: FinanceData, month: string): CategorySl
   const totals = new Map<string, number>();
   for (const transaction of data.transactions) {
     if (transaction.type !== "expense" || !isWithin(transaction.occurredOn, start, end)) continue;
-    if (!transaction.creditCardId && transaction.status !== "paid") continue;
     const key = transaction.categoryId ?? "none";
     totals.set(key, (totals.get(key) ?? 0) + transaction.amountCents);
   }
@@ -494,7 +493,7 @@ export function buildReport(data: FinanceData, fromMonth: string, toMonth: strin
   let futureCommitmentsCents = 0;
   for (const transaction of data.transactions) {
     if (transaction.occurredOn < start || transaction.occurredOn > end) continue;
-    if (transaction.type === "expense" && (transaction.creditCardId || transaction.status === "paid")) {
+    if (transaction.type === "expense") {
       const key = transaction.categoryId ?? "none";
       categoryTotals.set(key, (categoryTotals.get(key) ?? 0) + transaction.amountCents);
       if (transaction.recurrenceId) recurringCents += transaction.amountCents;

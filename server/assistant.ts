@@ -1,4 +1,5 @@
-import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantPlace, type AssistantResponse, type TransactionDraft } from "@/domain/assistant";
+import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantPlace, type AssistantResponse, type InterviewState, type TransactionDraft } from "@/domain/assistant";
+import { conductInterview, explicitDate, readAmountCents } from "@/domain/interview";
 import { resolveAmountCents, resolveOccurredOn, suggestCategory } from "@/domain/resolveText";
 import { buildDashboard } from "@/finance/engine";
 import { planBankInstallments, planCardInstallments, installmentsForDatabase } from "@/finance/installments";
@@ -25,12 +26,20 @@ Formato:
 
 function forcedQuery(text: string) {
   const lower = normalizeText(text);
+  if (/cartao|fatura/.test(lower)) return { metric: "cards" as const };
   if (/posso comprar|se eu comprar|cabe no orcamento/.test(lower)) return { metric: "can_afford" as const };
-  if (/vai sobrar|fim do mes|previsao|proximos dias|\b30 dias\b|\b60 dias\b|\b90 dias\b/.test(lower)) return { metric: "forecast" as const };
-  if (/quanto gastei|gastos com|gastei com/.test(lower)) return { metric: "category_total" as const };
-  if (/proximas contas|contas a pagar|o que tenho para pagar/.test(lower)) return { metric: "upcoming" as const };
-  if (/quanto tenho|quanto eu tenho|saldo|dinheiro tenho/.test(lower)) return { metric: "available_balance" as const };
+  if (/vai sobrar|fim do mes|saldo previsto|previsao|proximos dias|\b30 dias\b|\b60 dias\b|\b90 dias\b/.test(lower)) return { metric: "forecast" as const };
+  if (/quanto gastei com|gastos com|gastei com/.test(lower)) return { metric: "category_total" as const };
+  if (/quanto (eu )?estou devendo|quanto devo|divida|contas a pagar|o que tenho para pagar/.test(lower)) return { metric: "debt" as const };
+  if (/ainda vou receber|contas a receber|receber e pagar|o que falta/.test(lower)) return { metric: "open_items" as const };
+  if (/proximas contas/.test(lower)) return { metric: "upcoming" as const };
+  if (/quanto tenho|quanto eu tenho|dinheiro tenho|saldo atual|\bsaldo\b/.test(lower)) return { metric: "available_balance" as const };
+  if (/quanto recebi|receitas do mes|quanto gastei|despesas do mes|grafico|relatorio|como esta o mes|resumo/.test(lower)) return { metric: "month_overview" as const };
   return null;
+}
+
+function wantsNewAccount(text: string): boolean {
+  return /\b(cadastrar uma conta|nova conta|criar uma conta|criar conta)\b/.test(normalizeText(text));
 }
 
 function inferType(text: string): "income" | "expense" | null {
@@ -439,6 +448,114 @@ async function answerHousehold(userId: string, email: string, text: string, toda
   });
 }
 
+function readInterview(value: unknown): InterviewState | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  if (row.kind !== "income" && row.kind !== "paid" && row.kind !== "upcoming") return null;
+  return {
+    kind: row.kind,
+    amountCents: typeof row.amountCents === "number" && row.amountCents > 0 ? Math.round(row.amountCents) : null,
+    occurredOn: typeof row.occurredOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.occurredOn) ? row.occurredOn : null,
+    description: typeof row.description === "string" && row.description.trim().length >= 2 ? row.description.trim().slice(0, 80) : null,
+    accountId: typeof row.accountId === "string" ? row.accountId : null,
+  };
+}
+
+function inferEntry(text: string): InterviewState["kind"] | null {
+  const normalized = normalizeText(text);
+  if (/\b(recebi|receber|entrou|ganhei|receita)\b/.test(normalized)) return "income";
+  if (/\b(vou pagar|ainda vou|vai vencer|vence dia|vence em|conta a pagar)\b/.test(normalized)) return "upcoming";
+  if (/\b(paguei|gastei|comprei|despesa)\b/.test(normalized)) return "paid";
+  return null;
+}
+
+function chartPlace(month: string): AssistantPlace {
+  return { label: "Ver no gráfico", to: `/?mes=${month}#graficos` };
+}
+
+async function saveInterview(token: string, state: InterviewState, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace }> {
+  const occurred = state.occurredOn ?? today;
+  const type = state.kind === "income" ? "income" : "expense";
+  const status = state.kind === "income"
+    ? (occurred > today ? "planned" as const : "received" as const)
+    : state.kind === "paid"
+      ? (occurred > today ? "planned" as const : "paid" as const)
+      : (occurred > today ? "planned" as const : "pending" as const);
+  const category = suggestCategory(state.description ?? "", data.categories, type, state.description);
+  const draft: TransactionDraft = {
+    description: (state.description ?? "Lançamento").slice(0, 140),
+    amount_cents: state.amountCents ?? 0,
+    type,
+    occurred_on: occurred,
+    due_on: state.kind === "upcoming" ? occurred : null,
+    status,
+    category_id: category?.id ?? null,
+    account_id: state.accountId,
+    card_id: null,
+    payment_method: null,
+    notes: null,
+    installments: 1,
+  };
+  await confirmDraft(token, { kind: "transaction", draft }, data);
+  const account = data.accounts.find((item) => item.id === state.accountId);
+  const where = account?.name ?? "a conta";
+  const when = formatDateBR(occurred);
+  const effect = state.kind === "income"
+    ? (status === "received" ? "Esse valor entra no saldo e na parte verde do gráfico." : "A data é futura, então ele fica previsto e ainda não entra no saldo de hoje.")
+    : state.kind === "paid"
+      ? (status === "paid" ? "Esse valor sai do saldo e entra na parte vermelha do gráfico." : "A data é futura, então ele fica previsto.")
+      : "O dinheiro ainda não saiu. Ele fica na parte amarela, como conta a pagar.";
+  return {
+    reply: `${state.kind === "income" ? "Receita salva" : state.kind === "paid" ? "Gasto salvo" : "Conta futura salva"}: ${formatBRL(state.amountCents ?? 0)} de ${state.description}, em ${when}, na conta ${where}. ${effect}\nSe algum detalhe ficou errado, diga: muda o valor para 200. Quer anotar outro? Se acabou, diga: só isso.`,
+    place: chartPlace(occurred.slice(0, 7)),
+  };
+}
+
+async function applyChange(token: string, text: string, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace } | null> {
+  const normalized = normalizeText(text);
+  const change = /\b(muda|altera|corrige|atualiza|troca)\b/.test(normalized);
+  const remove = /\b(apaga|exclui|remove)\b/.test(normalized);
+  const pay = /\b(paguei|quitei|marca como pago|ja paguei)\b/.test(normalized) && readAmountCents(text) == null;
+  if (!change && !remove && !pay) return null;
+  const hint = normalized
+    .replace(/\b(muda|altera|corrige|atualiza|troca|apaga|exclui|remove|paguei|quitei|marca|como|pago|ja|valor|para|pra|o|a|de|do|da|lancamento|reais)\b/g, " ")
+    .replace(/\d[\d.,]*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const pool = data.transactions.filter((item) => {
+    if (item.type !== "income" && item.type !== "expense") return false;
+    if (pay) return item.type === "expense" && (item.status === "pending" || item.status === "planned");
+    return true;
+  });
+  const matches = hint
+    ? pool.filter((item) => normalizeText(item.description).includes(hint) || hint.includes(normalizeText(item.description)))
+    : [];
+  if (matches.length !== 1) {
+    const sample = (matches.length ? matches : pool).slice(0, 5).map((item) => item.description);
+    if (!sample.length) return { reply: "Ainda não há um lançamento com esse nome para eu mudar.", place: chartPlace(monthKey(today)) };
+    return { reply: `Encontrei mais de um jeito de entender. Diga o nome de um destes: ${sample.join(", ")}.`, place: chartPlace(monthKey(today)) };
+  }
+  const target = matches[0];
+  if (!target) return null;
+  const client = userClient(token);
+  if (remove) {
+    const { error } = await client.from("transactions").delete().eq("id", target.id);
+    if (error) throw new HttpError(400, "Não consegui apagar esse lançamento.");
+    return { reply: `Apaguei ${target.description}. O gráfico deixa de contar esses ${formatBRL(target.amountCents)}.`, place: chartPlace(target.occurredOn.slice(0, 7)) };
+  }
+  if (pay) {
+    const { error } = await client.from("transactions").update({ status: "paid", occurred_on: today }).eq("id", target.id);
+    if (error) throw new HttpError(400, "Não consegui marcar essa conta como paga.");
+    return { reply: `Marquei ${target.description} como paga hoje. ${formatBRL(target.amountCents)} saem do saldo e passam para a parte vermelha do gráfico.`, place: chartPlace(today.slice(0, 7)) };
+  }
+  const amount = readAmountCents(text);
+  if (!amount) return { reply: `Qual é o novo valor de ${target.description}?`, place: chartPlace(target.occurredOn.slice(0, 7)) };
+  const { error } = await client.from("transactions").update({ amount_cents: amount }).eq("id", target.id);
+  if (error) throw new HttpError(400, "Não consegui alterar esse valor.");
+  const direction = target.type === "income" ? "A receita" : "O gasto";
+  return { reply: `${direction} ${target.description} agora é ${formatBRL(amount)}. O gráfico usa esse novo número.`, place: chartPlace(target.occurredOn.slice(0, 7)) };
+}
+
 function isQuestion(text: string): boolean {
   if (text.includes("?")) return true;
   const normalized = normalizeText(text);
@@ -458,8 +575,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       return;
     }
     const text = String(body.text ?? "").trim();
-    const asking = isQuestion(text);
-    const guide = asking ? null : body.guide === "account" || body.guide === "income" || body.guide === "paid" || body.guide === "upcoming" ? body.guide : null;
+    const guide = body.guide === "account" || body.guide === "income" || body.guide === "paid" || body.guide === "upcoming" ? body.guide : null;
     if (text.length < 2) throw new HttpError(400, "Escreva o que você quer fazer.");
     if (text.length > 2000) throw new HttpError(400, "A mensagem pode ter no máximo 2000 caracteres.");
     const today = todayISO();
@@ -467,18 +583,67 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       await answerHousehold(user.id, user.email, text, today, res);
       return;
     }
+    const interview = readInterview(body.interview);
+    if (guide === "account" || wantsNewAccount(text)) {
+      const earlier = Array.isArray(body.history) ? body.history.filter((item) => (item as { role?: string }).role === "user").map((item) => String((item as { content?: string }).content ?? "")).join(" ") : "";
+      sendJson(res, 200, buildAccount(text, data, earlier));
+      return;
+    }
+    const spoken = inferEntry(text);
+    const aboutCard = /cart[aã]o|fatura/.test(normalizeText(text));
+    const activeKind = aboutCard ? null : guide === "income" || guide === "paid" || guide === "upcoming" ? guide : interview?.kind ?? null;
+    const switched = spoken != null && activeKind != null && spoken !== activeKind;
+    const entryKind = switched ? spoken : activeKind ?? spoken;
+    const interviewNow = switched ? null : interview;
+    if (entryKind && !(isQuestion(text) && readAmountCents(text) == null && explicitDate(text, today) == null && !matchByName(data.accounts, text))) {
+      if (!switched) {
+        const changed = await applyChange(user.token, text, data, today);
+        if (changed && /Marquei|Apaguei|agora é/.test(changed.reply)) {
+          sendJson(res, 200, { reply: changed.reply, place: changed.place, interview: null, saved: true, confirmation: null });
+          return;
+        }
+      }
+      if (entryKind === "paid" && readAmountCents(text) == null) {
+        const marked = await applyChange(user.token, text, data, today);
+        if (marked && /Marquei/.test(marked.reply)) {
+          sendJson(res, 200, { reply: marked.reply, place: marked.place, interview: null, saved: true, confirmation: null });
+          return;
+        }
+      }
+      const result = conductInterview(entryKind, text, interviewNow, data, today);
+      if (!result.ready || result.state.amountCents == null || !result.state.occurredOn || !result.state.description || !result.state.accountId) {
+        sendJson(res, 200, { reply: result.question ?? "Me diga o próximo detalhe.", interview: result.state, confirmation: null });
+        return;
+      }
+      const saved = await saveInterview(user.token, result.state, data, today);
+      sendJson(res, 200, { reply: saved.reply, place: saved.place, interview: null, saved: true, confirmation: null });
+      return;
+    }
+    if (!guide) {
+      const changed = await applyChange(user.token, text, data, today);
+      if (changed) {
+        sendJson(res, 200, { reply: changed.reply, place: changed.place, interview: null, saved: true, confirmation: null });
+        return;
+      }
+    }
     const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
     const historyText = history.map((item) => {
       const entry = item as { role?: string; content?: string };
       return `${entry.role === "user" ? "Pessoa" : "Assistente"}: ${String(entry.content ?? "").slice(0, 300)}`;
     }).join("\n");
-    if (guide === "account") {
-      const earlier = history.filter((item) => (item as { role?: string }).role === "user").map((item) => String((item as { content?: string }).content ?? "")).join(" ");
-      sendJson(res, 200, buildAccount(text, data, earlier));
+    if (guide === "income" || guide === "paid" || guide === "upcoming") {
+      const reminder = conductInterview(guide, "", interview, data, today).question;
+      const query = forcedQuery(text) ?? { metric: "month_overview" as const };
+      sendJson(res, 200, {
+        reply: `${answerQuery(query, data, today, text)}${reminder ? `\n\nPara continuar o lançamento: ${reminder}` : ""}`,
+        chart: chartForQuery(query, data, today, text),
+        place: chartPlace(monthKey(today)),
+        interview,
+        confirmation: null,
+      });
       return;
     }
-    await consumeAiQuota(user.id);
-    const forced = guide ? null : forcedQuery(text);
+    const forced = forcedQuery(text);
     if (forced) {
       const amount = forced.metric === "can_afford" ? resolveAmountCents(text, null) : null;
       const installments = inferInstallments(text);
@@ -491,10 +656,21 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
         payment: /cart[aã]o|cr[eé]dito/i.test(text) ? "credit" as const : "cash" as const,
         months: /tr[eê]s meses/i.test(text) ? 3 : /dois meses/i.test(text) ? 2 : 1,
       };
-      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), confirmation: null });
+      const reminder = guide === "income" || guide === "paid" || guide === "upcoming" ? conductInterview(guide, "", interview, data, today).question : null;
+      sendJson(res, 200, { reply: `${answerQuery(query, data, today, text)}${reminder ? `\n\nPara continuar o lançamento: ${reminder}` : ""}`, chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), interview, confirmation: null });
       return;
     }
-    const guideNote = guide === "income"
+    if (!/\b(transferi|transferir)\b/.test(normalizeText(text))) {
+      sendJson(res, 200, {
+        reply: "Eu respondo só sobre este app. Posso dizer quanto você tem, quanto deve, o que ainda vai receber e pagar, e quanto sobra no fim do mês. Também lanço receita, despesa, conta a pagar e conta bancária. Use um botão ou escreva de um desses jeitos.",
+        place: { label: "Ver na visão geral", to: "/" },
+        interview: null,
+        confirmation: null,
+      });
+      return;
+    }
+    await consumeAiQuota(user.id);
+    const guideNote = isQuestion(text) ? "" : guide === "income"
       ? "A pessoa está informando uma receita que já entrou. Use action create_transaction, type income e status received."
       : guide === "paid"
         ? "A pessoa está informando uma despesa que já pagou. Use action create_transaction, type expense e status paid."
@@ -511,7 +687,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     if (!guide && intent.action === "query" && intent.query?.metric) {
       const amount = intent.query.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query.amount_cents;
       const query = { ...intent.query, amount_cents: amount };
-      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), confirmation: null });
+      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: { ...placeForQuery(query, data, today, text), label: "Ver no gráfico" }, confirmation: null });
       return;
     }
     if (!guide && intent.action === "create_transfer") {

@@ -1,0 +1,280 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { Pencil, Trash2 } from "lucide-react";
+import { Button, EmptyState, Field, Input, Modal, MoneyField, MoneyText, PageHeader, Select, useConfirm } from "@/components/ui";
+import { useFinance } from "@/context/FinanceContext";
+import { useToast } from "@/context/ToastContext";
+import { formatDateBR, todayISO } from "@/lib/dates";
+import { errorMessage } from "@/lib/utils";
+import { COLORS } from "@/lib/labels";
+import { deleteTransaction, saveCategory, saveTransaction } from "@/services/data";
+import type { Transaction, TransactionStatus } from "@/types/models";
+
+type Mode = "income" | "expense";
+
+export function IncomePage() {
+  return <EntryPage mode="income" />;
+}
+
+export function ExpensePage() {
+  return <EntryPage mode="expense" />;
+}
+
+function EntryPage({ mode }: { mode: Mode }) {
+  const { data, refresh, today } = useFinance();
+  const toast = useToast();
+  const { confirm, dialog } = useConfirm();
+  const [params, setParams] = useSearchParams();
+  const [open, setOpen] = useState(params.get("novo") === "1");
+  const [editing, setEditing] = useState<Transaction | null>(null);
+  const [onlyOpen, setOnlyOpen] = useState(false);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const income = mode === "income";
+  const title = income ? "Receitas" : "Despesas";
+  const rows = useMemo(() => data.transactions
+    .filter((item) => item.type === mode && (income || !item.creditCardId))
+    .filter((item) => !onlyOpen || (income ? item.status !== "received" : item.status !== "paid"))
+    .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn)), [data.transactions, income, mode, onlyOpen]);
+
+  useEffect(() => {
+    if (params.get("novo") === "1") setOpen(true);
+  }, [params]);
+
+  function close() {
+    setOpen(false);
+    setEditing(null);
+    if (params.get("novo")) {
+      params.delete("novo");
+      setParams(params);
+    }
+  }
+
+  async function remove(item: Transaction) {
+    if (!(await confirm(`Apagar ${item.description}?`))) return;
+    try {
+      await deleteTransaction(item.id);
+      toast("Lançamento apagado.");
+      await refresh();
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    }
+  }
+
+  async function settle(item: Transaction) {
+    try {
+      await saveTransaction({
+        description: item.description,
+        amountCents: item.amountCents,
+        type: item.type,
+        occurredOn: today,
+        dueOn: item.dueOn ?? item.occurredOn,
+        status: income ? "received" : "paid",
+        categoryId: item.categoryId,
+        accountId: item.accountId,
+        paymentMethod: item.paymentMethod,
+        notes: item.notes,
+      }, item.id);
+      toast(income ? "Marcado como recebido." : "Marcado como pago.");
+      await refresh();
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title={title}
+        description={income
+          ? "Salário, serviço, cliente, venda ou outra entrada. Cada uma leva descrição, valor, categoria, data e se já foi recebida."
+          : "Alimentação, moradia, luz, internet, combustível, assinatura ou lazer. Cada uma leva descrição, valor, categoria, vencimento e se já foi paga. Compra no cartão fica na tela Cartões."}
+        action={<div className="flex gap-2"><Button variant="secondary" onClick={() => setCategoryOpen(true)}>Nova categoria</Button><Button onClick={() => { setEditing(null); setOpen(true); }}>{income ? "Nova receita" : "Nova despesa"}</Button></div>}
+      />
+      <div className="mb-4 flex gap-2">
+        <button className={`rounded-full px-3 py-1.5 text-sm ${onlyOpen ? "bg-surface text-muted" : "bg-accent text-white"}`} onClick={() => setOnlyOpen(false)}>Todas</button>
+        <button className={`rounded-full px-3 py-1.5 text-sm ${onlyOpen ? "bg-accent text-white" : "bg-surface text-muted"}`} onClick={() => setOnlyOpen(true)}>{income ? "Ainda vou receber" : "Ainda vou pagar"}</button>
+      </div>
+      {!rows.length ? (
+        <EmptyState title={income ? "Nenhuma receita ainda" : "Nenhuma despesa ainda"} text={income ? "Exemplo: Salário, R$ 3.200, categoria Salário, dia 5, recebido." : "Exemplo: Internet, R$ 120, categoria Contas da casa, vence dia 10, pendente."} action={<Button onClick={() => setOpen(true)}>{income ? "Lançar a primeira receita" : "Lançar a primeira despesa"}</Button>} />
+      ) : (
+        <div className="overflow-x-auto rounded-3xl border border-line bg-surface">
+          <table className="w-full min-w-[680px] text-left text-sm">
+            <thead className="text-xs text-muted">
+              <tr>
+                <th className="px-4 py-3">{income ? "Recebimento" : "Vencimento"}</th>
+                <th>Descrição</th>
+                <th>Categoria</th>
+                <th>Status</th>
+                <th>Valor</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((item) => {
+                const openItem = income ? item.status !== "received" : item.status !== "paid";
+                const category = data.categories.find((entry) => entry.id === item.categoryId)?.name ?? "Sem categoria";
+                return (
+                  <tr key={item.id} className="border-t border-line">
+                    <td className="px-4 py-3">{formatDateBR(item.dueOn || item.occurredOn)}</td>
+                    <td className="font-medium">{item.description}</td>
+                    <td>{category}</td>
+                    <td>{openItem ? "Pendente" : income ? "Recebido" : "Pago"}</td>
+                    <td><MoneyText cents={item.amountCents} tone={income ? "income" : "expense"} /></td>
+                    <td className="px-3 text-right">
+                      {openItem ? <button className="mr-1 rounded-lg px-2 py-1 text-xs text-accent" onClick={() => void settle(item)}>{income ? "Recebi" : "Paguei"}</button> : null}
+                      <button className="p-2" onClick={() => { setEditing(item); setOpen(true); }} aria-label="Editar"><Pencil size={15} /></button>
+                      <button className="p-2" onClick={() => void remove(item)} aria-label="Apagar"><Trash2 size={15} /></button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {open ? <EntryModal mode={mode} transaction={editing} today={today} onClose={close} /> : null}
+      {categoryOpen ? <CategoryModal mode={mode} onClose={() => setCategoryOpen(false)} /> : null}
+      {dialog}
+    </div>
+  );
+}
+
+function EntryModal({ mode, transaction, today, onClose }: { mode: Mode; transaction: Transaction | null; today: string; onClose: () => void }) {
+  const { data, refresh } = useFinance();
+  const toast = useToast();
+  const income = mode === "income";
+  const accounts = data.accounts.filter((account) => !account.archived);
+  const categories = data.categories.filter((category) => category.kind === mode);
+  const [description, setDescription] = useState(transaction?.description ?? "");
+  const [amount, setAmount] = useState<number | null>(transaction?.amountCents ?? null);
+  const [categoryId, setCategoryId] = useState(transaction?.categoryId ?? categories[0]?.id ?? "");
+  const [newCategory, setNewCategory] = useState("");
+  const [pickName, setPickName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pickName) return;
+    const found = data.categories.find((category) => category.kind === mode && category.name.toLocaleLowerCase("pt-BR") === pickName.toLocaleLowerCase("pt-BR"));
+    if (!found) return;
+    setCategoryId(found.id);
+    setPickName(null);
+  }, [data.categories, mode, pickName]);
+  const [date, setDate] = useState(transaction?.dueOn || transaction?.occurredOn || todayISO());
+  const [done, setDone] = useState(transaction ? (income ? transaction.status === "received" : transaction.status === "paid") : true);
+  const [accountId, setAccountId] = useState(transaction?.accountId ?? accounts[0]?.id ?? "");
+  const [saving, setSaving] = useState(false);
+
+  async function addCategory() {
+    const name = newCategory.trim();
+    if (name.length < 2) return toast("Informe o nome da categoria.", "error");
+    try {
+      await saveCategory(name, mode, COLORS[data.categories.length % COLORS.length]);
+      setPickName(name);
+      setNewCategory("");
+      await refresh();
+      toast("Categoria adicionada. Ela já aparece na lista.");
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    }
+  }
+
+  async function submit() {
+    if (!accounts.length) return toast("Cadastre uma conta antes, para saber onde o dinheiro está.", "error");
+    if (!amount) return toast("Informe o valor.", "error");
+    const status: TransactionStatus = income ? (done ? "received" : "pending") : (done ? "paid" : "pending");
+    setSaving(true);
+    try {
+      await saveTransaction({
+        description,
+        amountCents: amount,
+        type: mode,
+        occurredOn: date,
+        dueOn: date,
+        status,
+        categoryId: categoryId || null,
+        accountId,
+      }, transaction?.id);
+      toast(income ? "Receita salva." : "Despesa salva.");
+      await refresh();
+      onClose();
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={transaction ? "Editar" : income ? "Nova receita" : "Nova despesa"} onClose={onClose}>
+      {!accounts.length ? (
+        <div className="space-y-3 text-sm leading-6">
+          <p>Antes do valor, cadastre onde o dinheiro está. Pode ser o banco, uma carteira ou o dinheiro em espécie.</p>
+          <Link className="inline-block text-accent" to="/contas" onClick={onClose}>Cadastrar a conta</Link>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <Field label="Descrição" hint={income ? "Exemplos: Salário, Serviço, Cliente A, Venda." : "Exemplos: Mercado, Aluguel, Luz, Internet, Combustível."}>
+            <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+          </Field>
+          <MoneyField label="Valor" value={amount} onChange={setAmount} />
+          <Field label="Categoria">
+            <Select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              <option value="">Sem categoria</option>
+              {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </Select>
+          </Field>
+          <div className="flex gap-2">
+            <Input value={newCategory} placeholder={income ? "Nova categoria de receita" : "Nova categoria de despesa"} onChange={(event) => setNewCategory(event.target.value)} />
+            <Button variant="secondary" onClick={() => void addCategory()}>Adicionar</Button>
+          </div>
+          <Field label={income ? "Data de recebimento" : "Data de vencimento"}>
+            <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          </Field>
+          <Field label="Status">
+            <Select value={done ? "done" : "open"} onChange={(event) => setDone(event.target.value === "done")}>
+              <option value="done">{income ? "Recebido" : "Pago"}</option>
+              <option value="open">Pendente</option>
+            </Select>
+          </Field>
+          <Field label={income ? "Para qual conta foi" : "De qual conta sai"} hint={accounts.length === 1 ? "Você tem uma conta, então ela já fica escolhida." : "Escolha a conta deste lançamento."}>
+            <Select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+            </Select>
+          </Field>
+          <p className="text-xs text-muted">Hoje é {today.split("-").reverse().join("/")}.</p>
+          <Button onClick={() => void submit()} loading={saving}>Salvar</Button>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function CategoryModal({ mode, onClose }: { mode: Mode; onClose: () => void }) {
+  const { data, refresh } = useFinance();
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const income = mode === "income";
+  const categories = data.categories.filter((category) => category.kind === mode);
+  return (
+    <Modal title={income ? "Categorias de receita" : "Categorias de despesa"} onClose={onClose}>
+      <div className="space-y-4">
+        <div className="flex gap-2">
+          <Input value={name} placeholder="Nome da nova categoria" onChange={(event) => setName(event.target.value)} />
+          <Button onClick={async () => {
+            try {
+              await saveCategory(name, mode, COLORS[data.categories.length % COLORS.length]);
+              setName("");
+              await refresh();
+              toast("Categoria adicionada.");
+            } catch (error) {
+              toast(errorMessage(error), "error");
+            }
+          }}>Adicionar</Button>
+        </div>
+        <div className="space-y-2 text-sm">
+          {categories.length ? categories.map((category) => (
+            <p key={category.id} className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: category.color }} />{category.name}</p>
+          )) : <p className="text-muted">Nenhuma categoria ainda.</p>}
+        </div>
+      </div>
+    </Modal>
+  );
+}

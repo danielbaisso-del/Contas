@@ -5,11 +5,8 @@ import { AnswerChart } from "@/components/Charts";
 import { PlaceLink } from "@/components/PlaceLink";
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
-import type { AssistantChart, AssistantPlace, AssistantResponse, Confirmation } from "@/domain/assistant";
-import { firstGuideStep, isSkip, type GuideStep } from "@/domain/guide";
-import { monthIncome, monthSpending, pendingBills } from "@/finance/engine";
-import { currentMonth, formatMonthLabel } from "@/lib/dates";
-import { formatBRL } from "@/lib/money";
+import type { AssistantChart, AssistantPlace, AssistantResponse, Confirmation, InterviewState } from "@/domain/assistant";
+import { isSkip } from "@/domain/guide";
 import { errorMessage } from "@/lib/utils";
 import { askAssistant } from "@/services/ai";
 import { Button } from "@/components/ui";
@@ -31,32 +28,20 @@ export function useGuide() {
   return value;
 }
 
-const QUESTIONS: Record<Exclude<GuideStep, "done">, { title: string; text: string; example: string; saved: string }> = {
-  account: {
-    title: "Onde está o seu dinheiro agora?",
-    text: "Sem uma conta, o saldo não existe. Diga o nome e quanto tem hoje. Se faltar o valor, eu pergunto de novo.",
-    example: "Nubank com R$ 1.200",
-    saved: "Conta salva. Ela já entra no saldo. Tem outra? Se não, diga: só isso.",
-  },
-  income: {
-    title: "O que você já recebeu neste mês?",
-    text: "Isso pinta a fatia verde. Diga uma receita por vez, com o valor e a conta. Se faltar algum desses dados, eu peço.",
-    example: "Recebi R$ 3.200 de salário no Nubank",
-    saved: "Receita salva na fatia verde. Entrou mais alguma coisa? Se não, diga: só isso.",
-  },
-  paid: {
-    title: "O que você já pagou neste mês?",
-    text: "Isso pinta a fatia vermelha e a pizza das categorias. Diga uma conta por vez. Se faltar o valor, eu pergunto.",
-    example: "Paguei R$ 150 de internet",
-    saved: "Gasto pago salvo. Tem mais algum? Se não, diga: só isso.",
-  },
-  upcoming: {
-    title: "O que ainda vai pagar?",
-    text: "Isso pinta a fatia amarela e não tira o dinheiro agora. Diga o nome, o valor e o dia.",
-    example: "Aluguel de R$ 1.800 no dia 10",
-    saved: "Conta futura salva. Falta mais alguma? Se não, diga: só isso.",
-  },
-};
+const WELCOME = "Eu respondo com os números deste app. Posso dizer quanto você tem, quanto deve, o que ainda falta e quanto sobra no fim do mês. Também lanço receita, despesa e conta a pagar. Toque um botão ou escreva.";
+
+const ACTIONS: Array<{ label: string; text: string; kind: "ask" | "entry" | "account" }> = [
+  { label: "Quanto tenho?", text: "Quanto dinheiro tenho?", kind: "ask" },
+  { label: "Quanto devo?", text: "Quanto estou devendo?", kind: "ask" },
+  { label: "O que falta?", text: "Quanto ainda vou receber e pagar?", kind: "ask" },
+  { label: "Quanto sobra?", text: "Quanto vai sobrar no fim do mês?", kind: "ask" },
+  { label: "Nova receita", text: "Quero lançar uma receita", kind: "entry" },
+  { label: "Nova despesa", text: "Quero lançar uma despesa", kind: "entry" },
+  { label: "Conta a pagar", text: "Quero lançar uma conta a pagar", kind: "entry" },
+  { label: "Cartões", text: "Como estão os cartões?", kind: "ask" },
+  { label: "Gráficos", text: "Mostra os gráficos do mês", kind: "ask" },
+  { label: "Nova conta", text: "Quero cadastrar uma conta", kind: "account" },
+];
 
 function speechRecognizer() {
   const ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -69,20 +54,31 @@ function speechRecognizer() {
 }
 
 export function GuideProvider({ children }: { children: ReactNode }) {
-  const { data, today, refresh, loading: financeLoading } = useFinance();
+  const { data, refresh, loading: financeLoading } = useFinance();
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<GuideStep | null>(null);
+  const [accountMode, setAccountMode] = useState(false);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [focusChart, setFocusChart] = useState<AssistantChart | null>(null);
+  const [interview, setInterview] = useState<InterviewState | null>(null);
+  const [bubble, setBubble] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const raw = localStorage.getItem("contas-bubble");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { x?: number; y?: number };
+      if (typeof parsed.x === "number" && typeof parsed.y === "number") return { x: parsed.x, y: parsed.y };
+    } catch { /* a bolha começa no canto */ }
+    return null;
+  });
+  const bubblePoint = useRef(bubble);
+  bubblePoint.current = bubble;
+  const drag = useRef<{ offsetX: number; offsetY: number; startX: number; startY: number; moved: boolean } | null>(null);
   const recognition = useRef<SpeechRecognition | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const activeStep = step ?? firstGuideStep(data, today);
-  const question = activeStep === "done" ? null : QUESTIONS[activeStep];
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -94,12 +90,12 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     if (financeLoading || sessionStorage.getItem("contas-guide-auto")) return;
     if (data.accounts.some((account) => !account.archived)) return;
     sessionStorage.setItem("contas-guide-auto", "1");
-    setStep("account");
+    setItems((current) => current.length ? current : [{ id: crypto.randomUUID(), role: "assistant", content: WELCOME, confirmation: null, chart: null, place: null }]);
     setOpen(true);
   }, [data.accounts, financeLoading]);
 
   function openGuide() {
-    setStep((current) => current ?? firstGuideStep(data, today));
+    setItems((current) => current.length ? current : [{ id: crypto.randomUUID(), role: "assistant", content: WELCOME, confirmation: null, chart: null, place: null }]);
     setOpen(true);
   }
 
@@ -107,34 +103,32 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     setItems((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content, confirmation: null, chart: null, place: null }]);
   }
 
-  function advance(from: GuideStep) {
-    if (from === "account" && !data.accounts.some((account) => !account.archived)) {
-      setNotice("Preciso de pelo menos uma conta para guardar o dinheiro. Fale o nome e o saldo.");
-      return;
-    }
-    const order: GuideStep[] = ["account", "income", "paid", "upcoming", "done"];
-    const next = order[order.indexOf(from) + 1] ?? "done";
-    setStep(next);
-    setNotice(null);
-    if (next !== "done") say(QUESTIONS[next].title);
+  function stopEntry(content: string) {
+    setInterview(null);
+    setAccountMode(false);
+    setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null, chart: null, place: null }]);
+    say("Parei esse lançamento. Pode perguntar o saldo, a dívida, o que falta ou quanto sobra.");
   }
 
-  async function send(raw?: string) {
+  async function send(raw?: string, options?: { guide?: "account" | null; interview?: InterviewState | null }) {
     const content = (raw ?? text).trim();
     if (!content || loading) return;
     setText("");
     setNotice(null);
-    if (activeStep !== "done" && isSkip(content)) {
-      setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null, chart: null, place: null }]);
-      advance(activeStep);
+    const guide = options?.guide === null ? undefined : options?.guide ?? (accountMode ? "account" as const : undefined);
+    const currentInterview = options && "interview" in options ? options.interview ?? null : interview;
+    if ((guide === "account" || currentInterview) && isSkip(content)) {
+      stopEntry(content);
       return;
     }
     const history = items.slice(-6).map((item) => ({ role: item.role, content: item.content }));
     setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null, chart: null, place: null }]);
     setLoading(true);
     try {
-      const response = await askAssistant({ mode: "interpret", text: content, history, guide: activeStep === "done" ? undefined : activeStep });
+      const response = await askAssistant({ mode: "interpret", text: content, history, guide, interview: currentInterview });
       if (response.chart) setFocusChart(response.chart);
+      setInterview(response.interview ?? null);
+      if (response.saved) await refresh();
       setItems((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: response.reply, confirmation: response.confirmation, chart: response.chart ?? null, place: response.place ?? null }]);
     } catch (error) {
       toast(errorMessage(error), "error");
@@ -178,7 +172,9 @@ export function GuideProvider({ children }: { children: ReactNode }) {
       const response: AssistantResponse = await askAssistant({ mode: "confirm", kind: confirmation.kind, draft: confirmation.draft });
       setItems((current) => current.map((item) => item.id === itemId ? { ...item, confirmation: null } : item).concat({ id: crypto.randomUUID(), role: "assistant", content: response.reply, confirmation: null, chart: null, place: response.place ?? null }));
       await refresh();
-      if (activeStep !== "done") setNotice(QUESTIONS[activeStep].saved);
+      setInterview(null);
+      setAccountMode(false);
+      setNotice("Salvo. O número já entra na visão geral.");
     } catch (error) {
       toast(errorMessage(error), "error");
     } finally {
@@ -186,11 +182,32 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const month = currentMonth(today);
-  const received = monthIncome(data.transactions, month, "received");
-  const spent = monthSpending(data.transactions, month);
-  const pending = pendingBills(data.transactions, month, today);
-  const pendingTotal = pending.reduce((sum, item) => sum + item.amountCents, 0);
+  function choose(action: (typeof ACTIONS)[number]) {
+    if (action.kind === "ask") {
+      setInterview(null);
+      setAccountMode(false);
+      void send(action.text, { guide: null, interview: null });
+      return;
+    }
+    if (action.kind === "account") {
+      setInterview(null);
+      setAccountMode(true);
+      void send(action.text, { guide: "account", interview: null });
+      return;
+    }
+    setAccountMode(false);
+    setInterview(null);
+    void send(action.text, { guide: null, interview: null });
+  }
+
+  const accounts = data.accounts.filter((account) => !account.archived);
+  const followUps = interview?.amountCents != null && !interview.description
+    ? data.categories.filter((category) => category.kind === (interview.kind === "income" ? "income" : "expense")).slice(0, 6).map((category) => category.name)
+    : interview?.description && !interview.occurredOn
+      ? ["hoje", "ontem"]
+      : interview?.occurredOn && !interview.accountId && accounts.length > 1
+        ? accounts.map((account) => account.name)
+        : [];
 
   return (
     <GuideContext.Provider value={{ openGuide, focusChart }}>
@@ -200,46 +217,30 @@ export function GuideProvider({ children }: { children: ReactNode }) {
           <div className="flex max-h-[92vh] w-full max-w-lg flex-col rounded-t-3xl border border-line bg-surface shadow-2xl sm:rounded-3xl">
             <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-accent">Assistente Financeiro</p>
-                <h2 className="mt-1 text-lg font-semibold">{question?.title ?? "Seu mês está organizado"}</h2>
+                <p className="text-xs font-medium uppercase tracking-wide text-accent">Assistente</p>
+                <h2 className="mt-1 text-lg font-semibold">Chat do Contas</h2>
               </div>
               <button className="rounded-xl border border-line p-2" onClick={() => setOpen(false)} aria-label="Fechar"><X size={16} /></button>
             </div>
-            <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {[
-                  ["Conta", data.accounts.some((account) => !account.archived)],
-                  ["Já recebi", received > 0],
-                  ["Já paguei", spent > 0],
-                  ["Ainda vou pagar", pending.length > 0],
-                ].map(([label, done]) => (
-                  <p key={String(label)} className={`rounded-xl px-3 py-2 ${done ? "bg-income-soft text-income" : "bg-surface-2 text-muted"}`}>{done ? "Pronto" : "Falta"} · {label}</p>
-                ))}
-              </div>
-              {question ? <p className="text-sm leading-6 text-muted">{question.text} Exemplo: “{question.example}”.</p> : (
-                <div className="space-y-3 text-sm leading-6">
-                  <p>Usei só o que você confirmou. Em {formatMonthLabel(month)}: recebido {formatBRL(received)}, pago {formatBRL(spent)}, ainda a pagar {formatBRL(pendingTotal)}.</p>
-                  {!data.accounts.some((account) => !account.archived) || received === 0 || spent === 0 || pending.length === 0 ? <p>Ainda falta um pedaço para a pizza ficar completa. Escolha o que responder.</p> : <p>As três fatias do mês já têm valor.</p>}
-                  <div className="flex flex-wrap gap-2">
-                    {!data.accounts.some((account) => !account.archived) ? <Button onClick={() => setStep("account")}>Onde está o dinheiro</Button> : null}
-                    {received === 0 ? <Button onClick={() => setStep("income")}>O que já recebi</Button> : null}
-                    {spent === 0 ? <Button onClick={() => setStep("paid")}>O que já paguei</Button> : null}
-                    {pending.length === 0 ? <Button onClick={() => setStep("upcoming")}>O que ainda vou pagar</Button> : null}
-                  </div>
-                </div>
-              )}
+            <div ref={listRef} className="min-h-64 flex-1 space-y-3 overflow-y-auto px-5 py-4">
               {items.map((item) => (
-                <div key={item.id} className={`max-w-full rounded-2xl px-4 py-3 text-sm leading-6 ${item.role === "user" ? "ml-auto bg-accent text-white" : "bg-surface-2"}`}>
+                <div key={item.id} className={`w-fit max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${item.role === "user" ? "ml-auto bg-accent text-white" : "bg-surface-2"}`}>
                   <p className="whitespace-pre-line">{item.content}</p>
                   {item.chart ? <AnswerChart title={item.chart.title} kind={item.chart.kind} points={item.chart.points} /> : null}
-                  {item.place ? <PlaceLink place={item.place} /> : null}
+                  {item.place ? <PlaceLink place={item.place} onGo={() => setOpen(false)} /> : null}
                   {item.confirmation ? <ConfirmationCard confirmation={item.confirmation} disabled={loading} confirmLabel="Pode salvar" onDismiss={() => setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, confirmation: null } : entry))} onConfirm={(next) => void confirm(item.id, next)} /> : null}
                 </div>
               ))}
               {notice ? <p className="rounded-2xl bg-income-soft px-4 py-3 text-sm leading-6 text-income">{notice}</p> : null}
             </div>
             <div className="space-y-3 border-t border-line px-5 py-4">
-              <textarea className="w-full rounded-2xl border border-line bg-canvas px-3 py-3 text-sm text-ink outline-none focus:border-accent" rows={2} value={text} placeholder="Responda ou pergunte. Exemplo: quanto gastei com mercado?" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+              <div className="flex flex-wrap gap-2">
+                {(followUps.length ? followUps.map((label) => ({ label, text: label, kind: "entry" as const })) : ACTIONS).map((action) => (
+                  <button key={action.label} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-xs font-medium" disabled={loading} type="button" onClick={() => followUps.length ? void send(action.text) : choose(action)}>{action.label}</button>
+                ))}
+                {interview || accountMode ? <button className="rounded-full border border-line px-3 py-1.5 text-xs text-muted" type="button" onClick={() => stopEntry("só isso")}>Cancelar</button> : null}
+              </div>
+              <textarea className="w-full rounded-2xl border border-line bg-canvas px-3 py-3 text-sm text-ink outline-none focus:border-accent" rows={2} value={text} placeholder="Pergunte ou responda. Exemplo: quanto tenho?" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
               <div className="flex gap-2">
                 <button className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold ${listening ? "bg-expense text-white" : "bg-accent text-white"}`} onClick={listen} type="button">
                   {listening ? <Square size={16} /> : <Mic size={16} />}
@@ -251,9 +252,32 @@ export function GuideProvider({ children }: { children: ReactNode }) {
           </div>
         </div>
       ) : (
-        <button className="attention fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full bg-accent px-5 py-4 text-sm font-semibold text-white shadow-2xl" onClick={openGuide} type="button">
-          <Sparkles size={18} />
-          Falar com a IA
+        <button
+          className="attention fixed z-40 grid h-16 w-16 touch-none place-items-center rounded-full bg-accent text-white shadow-2xl"
+          style={bubble ? { left: bubble.x, top: bubble.y } : { right: 20, bottom: 20 }}
+          type="button"
+          aria-label="Falar com a IA"
+          onPointerDown={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            drag.current = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, moved: false };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            const current = drag.current;
+            if (!current) return;
+            if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) > 6) current.moved = true;
+            const x = Math.min(window.innerWidth - 72, Math.max(8, event.clientX - current.offsetX));
+            const y = Math.min(window.innerHeight - 72, Math.max(8, event.clientY - current.offsetY));
+            setBubble({ x, y });
+          }}
+          onPointerUp={() => {
+            const moved = drag.current?.moved ?? false;
+            drag.current = null;
+            if (bubblePoint.current) localStorage.setItem("contas-bubble", JSON.stringify(bubblePoint.current));
+            if (!moved) openGuide();
+          }}
+        >
+          <Sparkles size={22} />
         </button>
       )}
     </GuideContext.Provider>

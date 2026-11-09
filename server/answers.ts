@@ -1,4 +1,4 @@
-import { accountBalance, buildDashboard, projectCash, simulatePurchase, spendingByCategoryRange, totalBalance, upcomingItems } from "@/finance/engine";
+import { accountBalance, buildDashboard, cardCommittedCents, invoiceTotal, projectCash, simulatePurchase, spendingByCategoryRange, totalBalance, upcomingItems } from "@/finance/engine";
 import { addDays, formatDateBR, formatMonthLabel, monthKey, monthRange, shiftMonth } from "@/lib/dates";
 import { formatBRL, percentLabel } from "@/lib/money";
 import { normalizeText } from "@/lib/utils";
@@ -16,6 +16,16 @@ interface QueryDraft {
   installments?: number | null;
   payment?: "cash" | "credit" | null;
   starting_on?: string | null;
+}
+
+function openMoney(data: FinanceData) {
+  const receive = data.transactions.filter((item) => item.type === "income" && item.status !== "received");
+  const pay = data.transactions.filter((item) => item.type === "expense" && !item.creditCardId && item.status !== "paid");
+  const invoices = data.invoices.filter((invoice) => invoice.status !== "paid" && invoiceTotal(invoice.id, data.transactions) > 0);
+  const receiveCents = receive.reduce((sum, item) => sum + item.amountCents, 0);
+  const billCents = pay.reduce((sum, item) => sum + item.amountCents, 0);
+  const invoiceCents = invoices.reduce((sum, invoice) => sum + invoiceTotal(invoice.id, data.transactions), 0);
+  return { receive, pay, invoices, receiveCents, billCents, invoiceCents, debtCents: billCents + invoiceCents };
 }
 
 function categoryByName(data: FinanceData, name: string | null | undefined, kind?: "income" | "expense") {
@@ -49,7 +59,7 @@ export function answerQuery(query: QueryDraft, data: FinanceData, today: string,
       `Disponível hoje, somando as contas: ${formatBRL(balance)}.`,
       lines.length ? lines.join("\n") : "Ainda não há conta cadastrada.",
       "",
-      "Receita prevista e fatura em aberto não entram nesse número. A tela Contas mostra cada saldo separado.",
+      "Receita que ainda vai entrar e conta que ainda vai pagar não entram nesse número.",
     ].join("\n");
   }
 
@@ -69,7 +79,7 @@ export function answerQuery(query: QueryDraft, data: FinanceData, today: string,
         ? "Ainda não há receita neste mês para calcular a renda comprometida."
         : `Renda comprometida: ${percentLabel(dashboard.committedRatio)}.`,
       "",
-      "A visão geral abre este mês com as pizzas, as barras e a linha do saldo já calculadas.",
+      "A visão geral mostra estes mesmos números e os gráficos do mês.",
     ].join("\n");
   }
 
@@ -88,17 +98,53 @@ export function answerQuery(query: QueryDraft, data: FinanceData, today: string,
         "A conta junta o saldo de hoje, o que ainda entra e desconta contas e faturas até a data. Transferência entre suas contas não muda o total. A visão geral mostra estes três prazos.",
       ].join("\n");
     }
-    const end = monthRange(monthKey(today)).end;
+    const month = monthKey(today);
+    const end = monthRange(month).end;
+    const projected = buildDashboard(data, month, today).projectedEndCents;
     return [
-      `Relatório até o fim de ${formatMonthLabel(monthKey(today))}`,
-      "",
-      `Projeção em ${formatDateBR(end)}: ${formatBRL(projectCash(data, end, today))}.`,
-      `30 dias: ${formatBRL(projectCash(data, addDays(today, 30), today))}.`,
-      `60 dias: ${formatBRL(projectCash(data, addDays(today, 60), today))}.`,
-      `90 dias: ${formatBRL(projectCash(data, addDays(today, 90), today))}.`,
-      "",
-      "A visão geral mostra esta previsão junto com os gráficos do mês.",
+      `No fim de ${formatMonthLabel(month)} vão sobrar ${formatBRL(projected)}.`,
+      `A data desse cálculo é ${formatDateBR(end)}.`,
+      "Esse valor junta o saldo de hoje, soma o que ainda entra até o fim do mês e tira o que ainda sai.",
     ].join("\n");
+  }
+
+  if (metric === "debt") {
+    const open = openMoney(data);
+    const lines = [
+      ...open.pay.map((item) => `${item.description}: ${formatBRL(item.amountCents)}`),
+      ...open.invoices.map((invoice) => {
+        const card = data.cards.find((item) => item.id === invoice.creditCardId);
+        return `Fatura ${card?.name ?? "do cartão"}: ${formatBRL(invoiceTotal(invoice.id, data.transactions))}`;
+      }),
+    ];
+    return [
+      `Você está devendo ${formatBRL(open.debtCents)}.`,
+      open.billCents ? `Contas em aberto: ${formatBRL(open.billCents)}.` : "Não há conta bancária em aberto.",
+      open.invoiceCents ? `Faturas de cartão: ${formatBRL(open.invoiceCents)}.` : "Não há fatura em aberto.",
+      lines.length ? lines.join("\n") : "",
+      "A tela A pagar e receber lista cada uma. Em uma conta, o botão Paguei tira o valor do saldo.",
+    ].filter(Boolean).join("\n");
+  }
+
+  if (metric === "open_items") {
+    const open = openMoney(data);
+    const incoming = open.receive.map((item) => `${item.description}: ${formatBRL(item.amountCents)}`);
+    return [
+      `Ainda vai receber ${formatBRL(open.receiveCents)}.`,
+      `Ainda vai pagar ${formatBRL(open.debtCents)}.`,
+      incoming.length ? `A receber:\n${incoming.join("\n")}` : "Não há receita pendente.",
+      "O que vai pagar está em Contas a pagar, junto com as faturas.",
+    ].join("\n");
+  }
+
+  if (metric === "cards") {
+    const cards = data.cards.filter((card) => !card.archived);
+    if (!cards.length) return "Você ainda não cadastrou cartão. Na tela Cartões dá para colocar o limite, o fechamento e o vencimento.";
+    const lines = cards.map((card) => {
+      const used = cardCommittedCents(card.id, data.transactions, data.invoices);
+      return `${card.name}: limite ${formatBRL(card.limitCents)}, disponível ${formatBRL(card.limitCents - used)}, fecha dia ${card.closingDay}, vence dia ${card.dueDay}.`;
+    });
+    return ["Seus cartões:", ...lines, "A compra no cartão não sai da conta. O dinheiro sai quando a fatura é paga."].join("\n");
   }
 
   if (metric === "category_total") {
@@ -124,14 +170,14 @@ export function answerQuery(query: QueryDraft, data: FinanceData, today: string,
 
   if (metric === "upcoming") {
     const items = upcomingItems(data, today, 5);
-    if (!items.length) return "Não há contas, receitas ou faturas futuras em aberto.\n\nO calendário mostra o mês inteiro, dia por dia.";
+    if (!items.length) return "Não há contas, receitas ou faturas futuras em aberto.\n\nA tela A pagar e receber mostra o que ainda falta.";
     const lines = items.map((item) => `${formatDateBR(item.date)}: ${item.title} (${formatBRL(item.amountCents)})`);
     return [
       "Relatório das próximas contas",
       "",
       ...lines,
       "",
-      "O calendário abre no dia do primeiro compromisso, com o que entra e o que sai naquele dia.",
+      "A tela A pagar e receber abre essa lista, com o botão para marcar como pago ou recebido.",
     ].join("\n");
   }
 
@@ -163,7 +209,7 @@ export function answerQuery(query: QueryDraft, data: FinanceData, today: string,
     ].filter(Boolean).join("\n");
   }
 
-  return "Posso dizer seu saldo, o resumo do mês, uma previsão, gastos por categoria ou simular uma compra.";
+  return "Eu respondo quanto você tem, quanto deve, o que ainda falta e quanto sobra no fim do mês.";
 }
 
 function withPoints(title: string, kind: "pie" | "bars", points: Array<{ name: string; totalCents: number }>): AssistantChart | null {
@@ -191,10 +237,17 @@ export function chartForQuery(query: QueryDraft, data: FinanceData, today: strin
     ]);
   }
   if (metric === "forecast") {
-    return withPoints("Saldo projetado", "bars", [30, 60, 90].map((days) => ({
-      name: `${days} dias`,
-      totalCents: Math.max(0, projectCash(data, addDays(today, days), today)),
-    })));
+    const named = text.match(/\b(30|60|90)\s*dias\b/);
+    if (named) {
+      return withPoints("Saldo projetado", "bars", [30, 60, 90].map((days) => ({
+        name: `${days} dias`,
+        totalCents: Math.max(0, projectCash(data, addDays(today, days), today)),
+      })));
+    }
+    return withPoints("Saldo previsto", "bars", [{
+      name: "Fim do mês",
+      totalCents: Math.max(0, buildDashboard(data, monthKey(today), today).projectedEndCents),
+    }]);
   }
   if (metric === "category_total") {
     const months = Math.min(24, Math.max(1, Math.round(query.months || (/\btr[eê]s meses\b/i.test(text) ? 3 : 1))));
@@ -214,10 +267,20 @@ export function chartForQuery(query: QueryDraft, data: FinanceData, today: strin
       .sort((a, b) => b.totalCents - a.totalCents)
       .slice(0, 6));
   }
-  if (metric === "upcoming") {
-    return withPoints("Próximas contas", "bars", upcomingItems(data, today, 6).map((item) => ({
-      name: item.title,
-      totalCents: item.amountCents,
+  if (metric === "upcoming" || metric === "debt" || metric === "open_items") {
+    const open = openMoney(data);
+    const points = metric === "open_items"
+      ? [{ name: "A receber", totalCents: open.receiveCents }, { name: "A pagar", totalCents: open.debtCents }]
+      : [
+          ...open.pay.map((item) => ({ name: item.description, totalCents: item.amountCents })),
+          ...open.invoices.map((invoice) => ({ name: `Fatura ${data.cards.find((card) => card.id === invoice.creditCardId)?.name ?? "cartão"}`, totalCents: invoiceTotal(invoice.id, data.transactions) })),
+        ];
+    return withPoints(metric === "open_items" ? "O que ainda falta" : "Quanto você deve", metric === "open_items" ? "pie" : "bars", points);
+  }
+  if (metric === "cards") {
+    return withPoints("Limite disponível", "bars", data.cards.filter((card) => !card.archived).map((card) => ({
+      name: card.name,
+      totalCents: Math.max(0, card.limitCents - cardCommittedCents(card.id, data.transactions, data.invoices)),
     })));
   }
   if (metric === "can_afford" && query.amount_cents && query.amount_cents > 0) {
@@ -258,31 +321,30 @@ export function placeForQuery(query: QueryDraft, data: FinanceData, today: strin
       ? data.accounts.find((item) => item.name.toLocaleLowerCase("pt-BR").includes(query.account_name!.toLocaleLowerCase("pt-BR")))
       : null;
     return account
-      ? { label: `Ver a conta ${account.name}`, to: search("/contas", { conta: account.id }) }
-      : { label: "Ver o saldo em Contas", to: "/contas" };
+      ? { label: "Ver no gráfico", to: search("/contas", { conta: account.id }) }
+      : { label: "Ver no gráfico", to: "/contas" };
   }
   if (metric === "month_overview") {
     const month = query.month && /^\d{4}-\d{2}$/.test(query.month) ? query.month : monthKey(today);
-    return { label: `Ver ${formatMonthLabel(month)} na visão geral`, to: search("/", { mes: month }) };
+    return { label: "Ver no gráfico", to: `/?mes=${month}#graficos` };
   }
   if (metric === "forecast") {
-    return { label: "Ver a previsão na visão geral", to: `/?mes=${monthKey(today)}#previsao` };
+    return { label: "Ver no gráfico", to: `/?mes=${monthKey(today)}#previsao` };
   }
   if (metric === "category_total") {
     const months = Math.min(24, Math.max(1, Math.round(query.months || (/\btr[eê]s meses\b/i.test(text) ? 3 : 1))));
     const start = shiftMonth(monthKey(today), -(months - 1));
     const category = categoryByName(data, query.category_name, "expense") ?? categoryByName(data, text, "expense");
     return {
-      label: "Ver o relatório completo",
+      label: "Ver no gráfico",
       to: search("/relatorios", { de: start, ate: monthKey(today), foco: category?.name ?? null }),
     };
   }
-  if (metric === "upcoming") {
-    const first = upcomingItems(data, today, 1)[0];
-    return {
-      label: "Ver no calendário",
-      to: search("/calendario", { mes: first ? monthKey(first.date) : monthKey(today), dia: first?.date ?? null }),
-    };
+  if (metric === "upcoming" || metric === "debt" || metric === "open_items") {
+    return { label: "Ver as contas", to: "/compromissos" };
+  }
+  if (metric === "cards") {
+    return { label: "Abrir cartões", to: "/cartoes" };
   }
   if (metric === "can_afford") {
     const count = Math.min(48, Math.max(1, Math.round(query.installments || 1)));
@@ -305,10 +367,11 @@ export function placeFromText(text: string): AssistantPlace | null {
   if (/recorr/.test(normalized)) return { label: "Abrir recorrências", to: "/recorrencias" };
   if (/cartao|fatura/.test(normalized)) return { label: "Abrir cartões", to: "/cartoes" };
   if (/import/.test(normalized)) return { label: "Abrir importação", to: "/importar" };
-  if (/calend/.test(normalized)) return { label: "Abrir o calendário", to: "/calendario" };
-  if (/relatorio/.test(normalized)) return { label: "Abrir relatórios", to: "/relatorios" };
+  if (/calend|pagar|receber|venc/.test(normalized)) return { label: "Ver as contas", to: "/compromissos" };
+  if (/relatorio|grafico/.test(normalized)) return { label: "Abrir relatórios", to: "/relatorios" };
   if (/simul|posso comprar/.test(normalized)) return { label: "Abrir o simulador", to: "/simulador" };
-  if (/lancament|despesa|receita/.test(normalized)) return { label: "Abrir lançamentos", to: "/lancamentos" };
+  if (/receita|recebi|salario/.test(normalized)) return { label: "Abrir receitas", to: "/receitas" };
+  if (/lancament|despesa|gastei|paguei/.test(normalized)) return { label: "Abrir despesas", to: "/despesas" };
   return null;
 }
 
@@ -316,6 +379,6 @@ export function placeAfterSave(kind: string, draft: { occurred_on?: string; type
   if (kind === "account" || kind === "transfer") return { label: "Ver as contas", to: "/contas" };
   if (kind === "card_purchase" && draft.card_id) return { label: "Ver este cartão", to: `/cartoes/${draft.card_id}` };
   const month = draft.occurred_on && /^\d{4}-\d{2}-\d{2}$/.test(draft.occurred_on) ? draft.occurred_on.slice(0, 7) : "";
-  if (!month) return { label: "Ver na visão geral", to: "/" };
-  return { label: "Ver o mês atualizado nos gráficos", to: search("/", { mes: month }) };
+  if (!month) return { label: "Ver no gráfico", to: "/#graficos" };
+  return { label: "Ver no gráfico", to: `/?mes=${month}#graficos` };
 }

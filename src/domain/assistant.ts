@@ -102,9 +102,19 @@ export interface AssistantPlace {
   to: string;
 }
 
+export interface InterviewState {
+  kind: "income" | "paid" | "upcoming";
+  amountCents: number | null;
+  occurredOn: string | null;
+  description: string | null;
+  accountId: string | null;
+}
+
 export interface AssistantResponse {
   reply: string;
   confirmation: Confirmation | null;
   chart?: AssistantChart | null;
   place?: AssistantPlace | null;
+  interview?: InterviewState | null;
+  saved?: boolean;
 }

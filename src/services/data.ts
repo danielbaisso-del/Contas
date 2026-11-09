@@ -394,10 +394,10 @@ export async function setRecurrenceStatus(id: string, status: "active" | "paused
   if (error) throw new Error(friendlyDbError(error));
 }
 
-export async function saveCategory(name: string, kind: CategoryKind): Promise<void> {
+export async function saveCategory(name: string, kind: CategoryKind, color?: string): Promise<void> {
   const userId = await requireUserId();
   if (name.trim().length < 2) throw new Error("Informe o nome da categoria.");
-  const { error } = await supabase.from("categories").insert({ user_id: userId, name: name.trim(), kind, color: kind === "income" ? "#0f766e" : "#1d4ed8" });
+  const { error } = await supabase.from("categories").insert({ user_id: userId, name: name.trim(), kind, color: color || (kind === "income" ? "#0f766e" : "#1d4ed8") });
   if (error) throw new Error(friendlyDbError(error));
 }
 

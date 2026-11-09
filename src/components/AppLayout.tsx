@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { Bot, CalendarDays, CircleHelp, CreditCard, FileUp, Landmark, LayoutDashboard, LogOut, Menu, Moon, PieChart, Plus, RefreshCw, Repeat, Shield, Sparkles, Sun, Target, Users, Wallet, X } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CalendarDays, CreditCard, LayoutDashboard, LogOut, Menu, Moon, PieChart, RefreshCw, Shield, Sun, X } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useFinance } from "@/context/FinanceContext";
 import { useTheme } from "@/context/ThemeContext";
@@ -15,18 +15,11 @@ import { cx, errorMessage } from "@/lib/utils";
 
 const items = [
   { to: "/", label: "Visão geral", icon: LayoutDashboard, end: true },
-  { to: "/conjunto", label: "Juntos", icon: Users },
-  { to: "/lancamentos", label: "Lançamentos", icon: Wallet },
-  { to: "/contas", label: "Contas", icon: Landmark },
-  { to: "/cartoes", label: "Cartões", icon: CreditCard },
-  { to: "/recorrencias", label: "Recorrências", icon: Repeat },
-  { to: "/calendario", label: "Calendário", icon: CalendarDays },
-  { to: "/simulador", label: "E se eu comprar?", icon: Sparkles },
-  { to: "/metas", label: "Metas", icon: Target },
-  { to: "/relatorios", label: "Relatórios", icon: PieChart },
-  { to: "/importar", label: "Importar extrato", icon: FileUp },
-  { to: "/assistente", label: "Assistente", icon: Bot },
-  { to: "/ajuda", label: "Como funciona", icon: CircleHelp },
+  { to: "/receitas", label: "Receitas", icon: ArrowDownCircle, end: false },
+  { to: "/despesas", label: "Despesas", icon: ArrowUpCircle, end: false },
+  { to: "/compromissos", label: "A pagar e receber", icon: CalendarDays, end: false },
+  { to: "/cartoes", label: "Cartões", icon: CreditCard, end: false },
+  { to: "/relatorios", label: "Relatórios", icon: PieChart, end: false },
 ];
 
 export function AppLayout() {
@@ -75,7 +68,6 @@ export function AppLayout() {
           <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setOpen(false)} className={({ isActive }) => cx("flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm", isActive ? "bg-sidebar-active text-white" : "text-sidebar-muted hover:bg-white/5 hover:text-sidebar-ink")}>
             <item.icon size={18} />
             {item.label}
-            {item.to === "/conjunto" && invites.length ? <span className="ml-auto rounded-full bg-accent px-2 py-0.5 text-[10px] text-white">novo</span> : null}
           </NavLink>
         ))}
       </nav>
@@ -94,9 +86,10 @@ export function AppLayout() {
       <div className="lg:pl-64">
         <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-canvas/90 px-4 py-3 backdrop-blur md:px-8">
           <button className="rounded-xl border border-line p-2 lg:hidden" onClick={() => setOpen(true)} aria-label="Abrir menu"><Menu size={18} /></button>
-          <div className="hidden text-sm text-muted sm:block">Os números desta tela vêm dos seus lançamentos.</div>
+          <div className="hidden text-sm text-muted sm:block">Quanto tenho, quanto devo, o que falta e quanto sobra.</div>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="secondary" onClick={() => navigate("/lancamentos?novo=1")}><Plus size={16} /> Lançar</Button>
+            <Button variant="secondary" onClick={() => navigate("/receitas?novo=1")}>Receita</Button>
+            <Button onClick={() => navigate("/despesas?novo=1")}>Despesa</Button>
             <button className="rounded-xl border border-line p-2" onClick={() => void refresh()} aria-label="Atualizar"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /></button>
             <button className="rounded-xl border border-line p-2" onClick={toggle} aria-label="Alternar tema">{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}</button>
           </div>
