@@ -4,7 +4,9 @@ import { Button, EmptyState, Field, Input, Modal, MoneyField, MoneyText, PageHea
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
 import { invoiceTotal } from "@/finance/engine";
+import { fixedBillDates } from "@/finance/recurrence";
 import { formatDateBR, todayISO } from "@/lib/dates";
+import { formatBRL } from "@/lib/money";
 import { enableDueNotices, dueNoticesEnabled } from "@/lib/dueNotice";
 import { errorMessage } from "@/lib/utils";
 import { saveRecurrence, saveTransaction, setRecurrenceStatus } from "@/services/data";
@@ -146,7 +148,7 @@ function FixedBills() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-semibold">Contas fixas</h2>
-          <p className="text-sm text-muted">Aluguel, internet, luz. O mesmo valor todo mês, no dia que você escolher. Dá para mudar o nome, o valor e o dia depois.</p>
+          <p className="text-sm text-muted">Aluguel, internet, luz. O mesmo valor entra em todos os meses, no dia que você escolher. Dá para mudar o nome, o valor e o dia depois.</p>
         </div>
         <Button className="w-full sm:w-auto" onClick={() => { setEditing(null); setOpen(true); }}>Nova conta fixa</Button>
       </div>
@@ -179,6 +181,7 @@ function FixedForm({ recurrence, onClose }: { recurrence: Recurrence | null; onC
   const [categoryId, setCategoryId] = useState(recurrence?.categoryId ?? data.categories.find((item) => item.kind === "expense")?.id ?? "");
   const [accountId, setAccountId] = useState(recurrence?.accountId ?? data.accounts[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
+  const months = date ? fixedBillDates(date, todayISO()) : [];
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -198,7 +201,7 @@ function FixedForm({ recurrence, onClose }: { recurrence: Recurrence | null; onC
         interval: 1,
         startOn: date,
       }, recurrence?.id);
-      toast(recurrence ? "Conta fixa atualizada. Os próximos meses usam o novo nome, valor e dia." : "Conta fixa criada. Ela entra todo mês neste dia.");
+      toast(recurrence ? "Conta fixa atualizada. Todos os meses usam o novo nome, valor e dia." : "Conta fixa criada. Ela entra em todos os meses, neste dia.");
       onClose();
       await refresh();
     } catch (error) {
@@ -213,7 +216,8 @@ function FixedForm({ recurrence, onClose }: { recurrence: Recurrence | null; onC
       <form className="space-y-4" onSubmit={(event) => void submit(event)} key={recurrence?.id ?? "nova"}>
         <Field label="Nome"><Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Exemplo: Internet" required /></Field>
         <MoneyField label="Valor" value={amount} onChange={setAmount} />
-        <Field label="Dia do mês" hint="O aviso chega neste dia. Se mudar a data, os próximos meses passam para o novo dia."><Input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></Field>
+        <Field label="Dia do mês" hint="Esse dia vale para todos os meses. Se mudar a data, os próximos meses passam para o novo dia."><Input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></Field>
+        {months.length ? <div className="max-h-48 overflow-y-auto rounded-2xl border border-line p-3 text-sm">{months.map((day) => <p key={day} className="flex justify-between gap-3 py-1"><span>{formatDateBR(day)}</span><span>{amount == null ? "—" : formatBRL(amount)}</span></p>)}</div> : null}
         <Field label="Categoria"><Select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{data.categories.filter((item) => item.kind === "expense").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>
         <Field label="Conta que vai pagar"><Select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>
         <Button type="submit" disabled={busy}>{busy ? "Salvando..." : "Salvar"}</Button>

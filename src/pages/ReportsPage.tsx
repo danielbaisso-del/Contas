@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { BalanceChart, FlowChart, SeriesChart } from "@/components/Charts";
 import { PageHeader } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
-import { buildReport } from "@/finance/engine";
+import { appendInstallmentMonths, buildReport } from "@/finance/engine";
 import { currentMonth, shiftMonth } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 
@@ -19,6 +19,7 @@ export function ReportsPage() {
     if (end && /^\d{4}-\d{2}$/.test(end)) setTo(end);
   }, [params]);
   const report = useMemo(() => buildReport(data, from, to, today), [data, from, to, today]);
+  const months = useMemo(() => appendInstallmentMonths(data, report.months, today), [data, report.months, today]);
 
   return (
     <div className="space-y-4">
@@ -31,28 +32,28 @@ export function ReportsPage() {
       <article className="rounded-3xl border border-line bg-surface p-5">
         <h2 className="font-semibold">Receitas por mês</h2>
         <p className="mb-4 mt-1 text-sm text-muted">Só o que já foi marcado como recebido.</p>
-        <SeriesChart data={report.months} dataKey="incomeCents" color="var(--income)" caption="No mês mais recente entraram" />
-        <NumberList rows={report.months.map((item) => ({ name: item.label, value: formatBRL(item.incomeCents) }))} empty="Nenhuma receita neste período." />
+        <SeriesChart data={months} dataKey="incomeCents" color="var(--income)" caption="No mês mais recente entraram" />
+        <NumberList rows={months.map((item) => ({ name: item.label, value: formatBRL(item.incomeCents) }))} empty="Nenhuma receita neste período." />
       </article>
 
       <article className="rounded-3xl border border-line bg-surface p-5">
         <h2 className="font-semibold">Comparação entre receitas e despesas</h2>
-        <p className="mb-4 mt-1 text-sm text-muted">Verde é o que entrou. Vermelho é o que saiu no mesmo mês.</p>
-        <FlowChart data={report.months} />
+        <p className="mb-4 mt-1 text-sm text-muted">Verde é o total de ganhos do mês. Vermelho é o gasto medido por esse total.</p>
+        <FlowChart data={months} />
       </article>
 
       <article className="rounded-3xl border border-line bg-surface p-5">
         <h2 className="font-semibold">Evolução do saldo</h2>
         <p className="mb-4 mt-1 text-sm text-muted">A linha contínua é o saldo já realizado. A tracejada é a projeção do mês.</p>
-        <BalanceChart data={report.months} />
-        <NumberList rows={report.months.map((item) => ({ name: item.label, value: formatBRL(item.balanceCents) }))} empty="Cadastre uma conta para o saldo aparecer." />
+        <BalanceChart data={months} />
+        <NumberList rows={months.map((item) => ({ name: item.label, value: formatBRL(item.balanceCents) }))} empty="Cadastre uma conta para o saldo aparecer." />
       </article>
 
       <article className="rounded-3xl border border-line bg-surface p-5">
         <h2 className="font-semibold">Gastos dos últimos meses</h2>
-        <p className="mb-4 mt-1 text-sm text-muted">Despesas pagas e compras no cartão, mês a mês.</p>
-        <SeriesChart data={report.months} dataKey="expenseCents" color="var(--expense)" caption="No mês mais recente saíram" />
-        <NumberList rows={report.months.map((item) => ({ name: item.label, value: formatBRL(item.expenseCents) }))} empty="Nenhum gasto neste período." />
+        <p className="mb-4 mt-1 text-sm text-muted">A barra verde é o total de ganhos. A vermelha inclui o que já foi pago e as parcelas que vencem naquele mês.</p>
+        <SeriesChart data={months} dataKey="expenseCents" color="var(--expense)" caption="No mês mais recente saíram" />
+        <NumberList rows={months.map((item) => ({ name: item.label, value: `${formatBRL(item.expenseCents)} · ${item.incomeCents > 0 ? `${Math.round((item.expenseCents / item.incomeCents) * 100)}% dos ganhos` : "sem ganhos para comparar"}` }))} empty="Nenhum gasto neste período." />
       </article>
     </div>
   );

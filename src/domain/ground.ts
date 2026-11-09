@@ -1,5 +1,5 @@
 import type { InterviewState } from "@/domain/assistant";
-import { explicitDate, inferEntry, readAmountCents } from "@/domain/interview";
+import { explicitDate, inferEntry, readAmountCents, readInstallmentCount, wantsFixedBill } from "@/domain/interview";
 import { suggestCategory } from "@/domain/resolveText";
 import { formatBRL } from "@/lib/money";
 import { matchByName, normalizeText } from "@/lib/utils";
@@ -29,6 +29,7 @@ export interface LaunchDraft {
   categoryName: string | null;
   createCategory: string | null;
   installments: number;
+  fixed: boolean;
   paymentMethod: "pix" | "debit" | "credit" | "cash" | "boleto" | "transfer" | "other" | null;
 }
 
@@ -49,7 +50,7 @@ function descriptionFromText(text: string, data: FinanceData): string | null {
     .replace(/\b\d{1,2}[/\-.]\d{1,2}(?:[/\-.]\d{2,4})?\b/g, " ")
     .replace(/\b(hoje|ontem|amanh[aã]|dia)\s*\d{0,2}\b/gi, " ")
     .replace(/\b\d{1,7}(?:[.,]\d{1,2})?\b/g, " ")
-    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|devo|devendo|tenho|falta|quero|lancar|lan[cç]ar|anota|anotar|anote|coloca|colocar|registra|registrar|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s|tambem|tamb[eé]m|por|favor|ai|a[ií])\b/gi, " ")
+    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|devo|devendo|tenho|falta|quero|lancar|lan[cç]ar|anota|anotar|anote|coloca|colocar|registra|registrar|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s|tambem|tamb[eé]m|por|favor|ai|a[ií]|todo|todos|fixa|fixo|parcela|parcelas|parcelada|parcelado|vezes)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
@@ -116,6 +117,9 @@ export function groundLaunch(text: string, data: FinanceData, today: string, und
   if (category) lines.push(`Achei a categoria ${category.name}.`);
   else if (description) lines.push(`Não achei a categoria ${description}. Vou criar e lançar nela.`);
 
+  const fromText = readInstallmentCount(text);
+  const installments = Math.min(48, Math.max(1, fromText ?? Math.round(draft?.installments || 1)));
+  const fixed = wantsFixedBill(text) && installments === 1 && kind !== "income" && !cardMode;
   const missing: string[] = [];
   if (amount == null) missing.push(kind === "income" ? "Qual valor entrou?" : kind === "paid" ? "Qual valor saiu?" : "Qual é o valor?");
   if (!description) missing.push(kind === "income" ? "De onde veio esse dinheiro?" : "Como se chama esse lançamento?");
@@ -132,6 +136,8 @@ export function groundLaunch(text: string, data: FinanceData, today: string, und
       occurredOn: date,
       description,
       accountId: cardMode ? null : account?.id ?? null,
+      installments: installments > 1 ? installments : null,
+      fixed,
     };
     return { reply: `${intro}\n\n${found}\n\n${missing[0] ?? "Falta um detalhe para eu lançar."}`, ready: false, draft: null, interview };
   }
@@ -142,7 +148,6 @@ export function groundLaunch(text: string, data: FinanceData, today: string, und
     : kind === "upcoming"
       ? (future ? "planned" as const : "pending" as const)
       : (future ? "planned" as const : "paid" as const);
-  const installments = Math.min(48, Math.max(1, Math.round(draft?.installments || 1)));
   const payment = draft?.payment_method;
   const paymentMethod = cardMode
     ? "credit" as const
@@ -150,7 +155,7 @@ export function groundLaunch(text: string, data: FinanceData, today: string, und
       ? payment
       : null;
   return {
-    reply: `${intro}\n\n${found}\n\nLancei no sistema.`,
+    reply: `${intro}\n\n${found}\n\n${fixed ? "Lancei como conta fixa, neste dia, em todos os meses." : installments > 1 ? `Lancei em ${installments} parcelas, uma em cada mês.` : "Lancei no sistema."}`,
     ready: true,
     interview: null,
     draft: {
@@ -166,6 +171,7 @@ export function groundLaunch(text: string, data: FinanceData, today: string, und
       categoryName: category?.name ?? null,
       createCategory,
       installments,
+      fixed,
       paymentMethod,
     },
   };

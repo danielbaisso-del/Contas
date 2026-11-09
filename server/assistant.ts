@@ -367,6 +367,8 @@ function readInterview(value: unknown): InterviewState | null {
     occurredOn: typeof row.occurredOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.occurredOn) ? row.occurredOn : null,
     description: typeof row.description === "string" && row.description.trim().length >= 2 ? row.description.trim().slice(0, 80) : null,
     accountId: typeof row.accountId === "string" ? row.accountId : null,
+    installments: typeof row.installments === "number" && row.installments >= 2 && row.installments <= 48 ? Math.round(row.installments) : null,
+    fixed: row.fixed === true,
   };
 }
 
@@ -413,13 +415,22 @@ async function saveInterview(token: string, userId: string, state: InterviewStat
     card_id: null,
     payment_method: null,
     notes: null,
-    installments: 1,
+    installments: state.installments ?? 1,
   };
-  await confirmDraft(token, { kind: "transaction", draft }, data);
+  if (state.fixed && type === "expense" && state.accountId) {
+    await saveFixedBill(token, userId, draft);
+    return {
+      reply: `Conta fixa salva: ${formatBRL(draft.amount_cents)} de ${draft.description}, todo dia ${occurred.slice(8, 10)}, na conta ${data.accounts.find((item) => item.id === state.accountId)?.name ?? "escolhida"}. ${categoryLine} Ela entra em todos os meses a partir de ${formatDateBR(occurred)}.`,
+      place: { label: "Ver as contas fixas", to: "/compromissos" },
+    };
+  }
+  await confirmDraft(token, { kind: (draft.installments ?? 1) > 1 ? "bank_installments" : "transaction", draft }, data);
   const account = data.accounts.find((item) => item.id === state.accountId);
   const where = account?.name ?? "a conta";
   const when = formatDateBR(occurred);
-  const effect = state.kind === "income"
+  const effect = (draft.installments ?? 1) > 1
+    ? `Dividi em ${draft.installments} parcelas, uma em cada mês a partir de ${when}.`
+    : state.kind === "income"
     ? (status === "received" ? "Esse valor entra no saldo e na parte verde do gráfico." : "A data é futura, então ele fica previsto e ainda não entra no saldo de hoje.")
     : state.kind === "paid"
       ? (status === "paid" ? "Esse valor sai do saldo e entra na parte vermelha do gráfico." : "A data é futura, então ele fica previsto.")
@@ -435,15 +446,19 @@ async function applyChange(token: string, text: string, data: FinanceData, today
   const change = /\b(muda|altera|corrige|atualiza|troca)\b/.test(normalized);
   const remove = /\b(apaga|exclui|remove)\b/.test(normalized);
   const pay = /\b(paguei|quitei|marca como pago|ja paguei)\b/.test(normalized) && readAmountCents(text) == null;
-  if (!change && !remove && !pay) return null;
-  const hint = normalized
-    .replace(/\b(muda|altera|corrige|atualiza|troca|apaga|exclui|remove|paguei|quitei|marca|como|pago|ja|valor|para|pra|o|a|de|do|da|lancamento|reais)\b/g, " ")
+  const received = /\b(recebi|ja recebi|marca como recebido)\b/.test(normalized) && readAmountCents(text) == null;
+  const closeFixed = /\b(encerra|encerrar|cancela a conta fixa)\b/.test(normalized);
+  if (!change && !remove && !pay && !received && !closeFixed) return null;
+  const hint = normalizeText(text.replace(/\b(?:nome|chama|descri[cç][aã]o|data|valor)\b[\s\S]*\b(?:para|pra)\s+.+$/i, " "))
+    .replace(/\b(muda|altera|corrige|atualiza|troca|apaga|exclui|remove|encerra|encerrar|cancela|paguei|quitei|recebi|marca|como|pago|recebido|ja|valor|nome|data|para|pra|o|a|de|do|da|lancamento|reais|conta|fixa)\b/g, " ")
     .replace(/\d[\d.,]*/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   const pool = data.transactions.filter((item) => {
     if (item.type !== "income" && item.type !== "expense") return false;
     if (pay) return item.type === "expense" && (item.status === "pending" || item.status === "planned");
+    if (received) return item.type === "income" && item.status !== "received";
+    if (closeFixed) return Boolean(item.recurrenceId);
     return true;
   });
   const matches = hint
@@ -457,22 +472,66 @@ async function applyChange(token: string, text: string, data: FinanceData, today
   const target = matches[0];
   if (!target) return null;
   const client = userClient(token);
-  if (remove) {
+  if (remove || closeFixed) {
+    if (target.recurrenceId) {
+      const { error: stopError } = await client.from("recurrences").update({ status: "cancelled" }).eq("id", target.recurrenceId);
+      if (stopError) throw new HttpError(400, "Não consegui encerrar a conta fixa.");
+      const { error: dropError } = await client.from("transactions").delete().eq("recurrence_id", target.recurrenceId).in("status", ["planned", "pending"]).gte("occurred_on", today);
+      if (dropError) throw new HttpError(400, "Não consegui tirar os meses seguintes da conta fixa.");
+      return { reply: `Encerrei a conta fixa ${target.description}. Os meses que ainda não foram pagos saíram da lista.`, place: { label: "Ver as contas fixas", to: "/compromissos" } };
+    }
+    if (target.installmentGroupId) {
+      const { error } = await client.from("transactions").delete().eq("installment_group_id", target.installmentGroupId).neq("type", "invoice_payment");
+      if (error) throw new HttpError(400, "Não consegui apagar as parcelas.");
+      return { reply: `Apaguei todas as parcelas de ${target.description}.`, place: chartPlace(target.occurredOn.slice(0, 7)) };
+    }
     const { error } = await client.from("transactions").delete().eq("id", target.id);
     if (error) throw new HttpError(400, "Não consegui apagar esse lançamento.");
     return { reply: `Apaguei ${target.description}. O gráfico deixa de contar esses ${formatBRL(target.amountCents)}.`, place: chartPlace(target.occurredOn.slice(0, 7)) };
   }
-  if (pay) {
-    const { error } = await client.from("transactions").update({ status: "paid", occurred_on: today }).eq("id", target.id);
-    if (error) throw new HttpError(400, "Não consegui marcar essa conta como paga.");
-    return { reply: `Marquei ${target.description} como paga hoje. ${formatBRL(target.amountCents)} saem do saldo e passam para a parte vermelha do gráfico.`, place: chartPlace(today.slice(0, 7)) };
+  if (pay || received) {
+    const status = received ? "received" : "paid";
+    const { error } = await client.from("transactions").update({ status, occurred_on: today }).eq("id", target.id);
+    if (error) throw new HttpError(400, received ? "Não consegui marcar essa receita como recebida." : "Não consegui marcar essa conta como paga.");
+    return { reply: received ? `Marquei ${target.description} como recebida hoje. ${formatBRL(target.amountCents)} entram no saldo.` : `Marquei ${target.description} como paga hoje. ${formatBRL(target.amountCents)} saem do saldo e passam para a parte vermelha do gráfico.`, place: chartPlace(today.slice(0, 7)) };
   }
   const amount = readAmountCents(text);
-  if (!amount) return { reply: `Qual é o novo valor de ${target.description}?`, place: chartPlace(target.occurredOn.slice(0, 7)) };
-  const { error } = await client.from("transactions").update({ amount_cents: amount }).eq("id", target.id);
-  if (error) throw new HttpError(400, "Não consegui alterar esse valor.");
-  const direction = target.type === "income" ? "A receita" : "O gasto";
-  return { reply: `${direction} ${target.description} agora é ${formatBRL(amount)}. O gráfico usa esse novo número.`, place: chartPlace(target.occurredOn.slice(0, 7)) };
+  const date = explicitDate(text, today);
+  const renamed = text.match(/\b(?:nome|chama|descri[cç][aã]o)\b[\s\S]*?\b(?:para|pra)\s+(.+)$/i);
+  const nextName = renamed?.[1]?.trim().replace(/[.?!]+$/, "").slice(0, 80) ?? "";
+  const patch: Record<string, unknown> = {};
+  if (amount) patch.amount_cents = amount;
+  if (date) {
+    patch.occurred_on = date;
+    patch.due_on = date;
+  }
+  if (nextName.length >= 2) patch.description = nextName.charAt(0).toUpperCase() + nextName.slice(1);
+  if (!Object.keys(patch).length) return { reply: `Diga o novo valor, a nova data ou o novo nome de ${target.description}.`, place: chartPlace(target.occurredOn.slice(0, 7)) };
+  const { error } = await client.from("transactions").update(patch).eq("id", target.id);
+  if (error) throw new HttpError(400, "Não consegui alterar esse lançamento.");
+  const bits = [
+    amount ? `valor ${formatBRL(amount)}` : "",
+    date ? `data ${formatDateBR(date)}` : "",
+    nextName.length >= 2 ? `nome ${patch.description}` : "",
+  ].filter(Boolean).join(", ");
+  return { reply: `Atualizei ${target.description}: ${bits}.`, place: chartPlace((date ?? target.occurredOn).slice(0, 7)) };
+}
+
+async function saveFixedBill(token: string, userId: string, draft: TransactionDraft): Promise<void> {
+  const client = userClient(token);
+  const { error } = await client.from("recurrences").insert({
+    user_id: userId,
+    description: draft.description,
+    amount_cents: draft.amount_cents,
+    type: "expense",
+    category_id: draft.category_id ?? null,
+    account_id: draft.account_id,
+    frequency: "monthly",
+    interval: 1,
+    start_on: draft.occurred_on,
+    day_of_month: Number(draft.occurred_on.slice(8, 10)),
+  });
+  if (error) throw new HttpError(400, "Não consegui criar a conta fixa.");
 }
 
 async function launchFromGround(token: string, userId: string, grounded: GroundLaunch, data: FinanceData): Promise<{ reply: string; place: AssistantPlace }> {
@@ -483,6 +542,23 @@ async function launchFromGround(token: string, userId: string, grounded: GroundL
     const created = await ensureCategory(token, userId, draft.createCategory, draft.type, data.categories.length);
     categoryId = created.id;
     data.categories.push({ id: created.id, name: created.name, kind: draft.type, color: COLORS[data.categories.length % COLORS.length] ?? "#1d4ed8" });
+  }
+  if (draft.fixed && draft.accountId) {
+    await saveFixedBill(token, userId, {
+      description: draft.description,
+      amount_cents: draft.amountCents,
+      type: "expense",
+      occurred_on: draft.occurredOn,
+      due_on: draft.occurredOn,
+      status: "pending",
+      category_id: categoryId,
+      account_id: draft.accountId,
+      card_id: null,
+      payment_method: null,
+      notes: null,
+      installments: 1,
+    });
+    return { reply: grounded.reply, place: { label: "Ver as contas fixas", to: "/compromissos" } };
   }
   const saved = await confirmDraft(token, {
     kind: draft.cardId ? "card_purchase" : draft.installments > 1 ? "bank_installments" : "transaction",
@@ -638,7 +714,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     const normalized = normalizeText(text);
     if (readAmountCents(text) == null && !inferEntry(text) && !/\b(transferi|transferir|anota|anotar|lanca|lan[cç]ar)\b/.test(normalized) && /^(oi|ola|obrigad|bom dia|boa tarde|boa noite)\b|explica|para que serve|o que (e|voce) faz|como (eu )?uso|como funciona/.test(normalized)) {
       sendJson(res, 200, {
-        reply: "Eu cuido do seu dinheiro neste app. Digo quanto você tem, quanto deve, o que ainda vai receber e pagar, e quanto sobra no fim do mês. Quando você fala um valor, eu procuro a conta e a categoria. Se achar, eu lanço.",
+        reply: "Eu cuido do seu dinheiro neste app. Digo quanto você tem, quanto deve, o que ainda vai receber e pagar, e quanto sobra no fim do mês. Quando você fala um valor, eu procuro a conta e a categoria. Se achar, eu lanço, inclusive parcela e conta fixa. Também mudo valor, data e nome, marco como pago ou recebido e apago o lançamento que você nomear.",
         interview: null,
         confirmation: null,
       });

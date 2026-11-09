@@ -10,91 +10,33 @@ function axis(value: number) {
 const tooltipStyle = { background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, color: "var(--ink)" };
 const palette = ["#3ecf8e", "#f07178", "#e6b450", "#7aa7ff", "#c084fc", "#fb923c", "#22d3ee", "#f472b6"];
 
-function ColorPreview({ names }: { names: string[] }) {
-  const slices = names.length ? names : ["Já recebi", "Já paguei", "Ainda vou pagar", "Categorias"];
-  const radius = 42;
-  const turn = 2 * Math.PI * radius;
-  const slice = turn / slices.length;
-  return (
-    <div className="grid items-center gap-4 md:grid-cols-[220px_1fr]">
-      <svg viewBox="0 0 120 120" className="chart-spin mx-auto h-56 w-56" aria-hidden="true">
-        <circle cx="60" cy="60" r="28" fill="var(--surface)" />
-        {slices.map((name, index) => (
-          <circle key={name} cx="60" cy="60" r={radius} fill="none" stroke={palette[index % palette.length]} strokeWidth="18" strokeDasharray={`${slice - 4} ${turn}`} strokeDashoffset={-index * slice} strokeLinecap="butt" />
-        ))}
-      </svg>
-      <div>
-        <ul className="space-y-2">
-          {slices.map((name, index) => (
-            <li key={name} className="flex items-center gap-2 text-sm">
-              <span className="h-3 w-3 rounded-full" style={{ background: palette[index % palette.length] }} />
-              {name}
-            </li>
-          ))}
-        </ul>
-        <p className="mt-3 text-xs leading-5 text-muted">As cores se movem enquanto ainda não há valor. O seu número entra no lugar desta animação.</p>
-      </div>
-    </div>
-  );
+function shareLabel(partCents: number, incomeCents: number): string {
+  if (incomeCents <= 0) return "sem ganhos para comparar";
+  return `${Math.round((partCents / incomeCents) * 100)}% dos ganhos`;
 }
 
-function BarPreview() {
-  const months = [
-    ["Mês 1", 55, 35],
-    ["Mês 2", 70, 48],
-    ["Mês 3", 46, 62],
-    ["Mês 4", 80, 40],
-  ];
-  return (
-    <div>
-      <div className="flex h-56 items-end gap-3">
-        {months.map(([label, income, expense], index) => (
-          <div key={String(label)} className="flex flex-1 flex-col items-center gap-2">
-            <div className="flex h-48 w-full items-end justify-center gap-1">
-              <div className="chart-bar w-3 rounded-t-md bg-income" style={{ height: `${income}%`, animationDelay: `${index * 0.15}s` }} />
-              <div className="chart-bar w-3 rounded-t-md bg-expense" style={{ height: `${expense}%`, animationDelay: `${index * 0.15 + 0.2}s` }} />
-            </div>
-            <span className="text-xs text-muted">{label}</span>
-          </div>
-        ))}
-      </div>
-      <p className="mt-3 text-xs leading-5 text-muted">Verde é o que entra e vermelho é o que sai. Esta forma é só visual até o primeiro lançamento.</p>
-    </div>
-  );
-}
-
-function LinePreview() {
-  return (
-    <div>
-      <svg viewBox="0 0 320 140" className="h-56 w-full" aria-hidden="true">
-        <path d="M10 100 C 50 90, 70 40, 110 60 S 170 120, 210 70 S 270 20, 310 48" fill="none" stroke="#7aa7ff" strokeWidth="4" strokeLinecap="round" className="chart-draw" />
-        <path d="M10 110 C 60 100, 90 70, 140 84 S 200 130, 250 90 S 290 60, 310 72" fill="none" stroke="#e6b450" strokeWidth="4" strokeDasharray="8 8" strokeLinecap="round" />
-      </svg>
-      <p className="mt-3 text-xs leading-5 text-muted">A linha azul é o saldo já realizado e a amarela é a projeção. Elas passam a seguir os seus valores.</p>
-    </div>
-  );
-}
-
-function PieBlock({ data, emptyNames, keepZeros = false }: { data: Array<{ name: string; totalCents: number; color?: string }>; emptyNames: string[]; keepZeros?: boolean }) {
+function PieBlock({ data, keepZeros = false, baseCents, centerLabel = "Total", centerCents }: { data: Array<{ name: string; totalCents: number; color?: string }>; emptyNames?: string[]; keepZeros?: boolean; baseCents?: number; centerLabel?: string; centerCents?: number }) {
   const total = data.reduce((sum, item) => sum + item.totalCents, 0);
-  if (!total) return <ColorPreview names={emptyNames.length ? emptyNames : data.map((item) => item.name)} />;
-  const pie = data.filter((item) => item.totalCents > 0);
-  const legend = keepZeros ? data : pie;
+  const real = data.filter((item) => item.totalCents > 0);
+  const pie = real.length ? real : [{ name: data[0]?.name || "Ganhos do mês", totalCents: 1, color: "#3ecf8e" }];
+  const legend = real.length ? (keepZeros ? data : real) : data.length ? data : [{ name: pie[0].name, totalCents: 0, color: pie[0].color }];
+  const base = baseCents ?? total;
+  const shown = centerCents ?? total;
   return (
     <div className="grid items-center gap-4 md:grid-cols-[240px_1fr]">
       <div className="relative h-64">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Pie data={pie} dataKey="totalCents" nameKey="name" innerRadius={68} outerRadius={96} paddingAngle={3} stroke="transparent">
+            <Pie data={pie} dataKey="totalCents" nameKey="name" innerRadius={68} outerRadius={96} paddingAngle={pie.length > 1 ? 3 : 0} stroke="transparent">
               {pie.map((item, index) => <Cell key={item.name} fill={item.color || palette[index % palette.length]} />)}
             </Pie>
-            <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
+            <Tooltip formatter={(value: number) => formatBRL(real.length ? Number(value) : 0)} contentStyle={tooltipStyle} />
           </PieChart>
         </ResponsiveContainer>
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
           <div className="text-center">
-            <p className="text-xs text-muted">Total</p>
-            <p className="text-base font-semibold tabular-nums">{formatBRL(total)}</p>
+            <p className="text-xs text-muted">{centerLabel}</p>
+            <p className="text-base font-semibold tabular-nums">{formatBRL(shown)}</p>
           </div>
         </div>
       </div>
@@ -102,7 +44,7 @@ function PieBlock({ data, emptyNames, keepZeros = false }: { data: Array<{ name:
         {legend.map((item, index) => (
           <li key={item.name} className="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between">
             <span className="flex min-w-0 items-center gap-2"><span className="h-3 w-3 shrink-0 rounded-full" style={{ background: item.color || palette[index % palette.length] }} />{item.name}</span>
-            <span className="font-semibold tabular-nums sm:text-right">{formatBRL(item.totalCents)} · {total ? Math.round((item.totalCents / total) * 100) : 0}%</span>
+            <span className="font-semibold tabular-nums sm:text-right">{formatBRL(item.totalCents)}{base > 0 ? ` · ${Math.round((item.totalCents / base) * 100)}%` : ""}</span>
           </li>
         ))}
       </ul>
@@ -115,23 +57,21 @@ export function AnswerChart({ title, kind, points }: { title: string; kind: "pie
     <div className="mt-3">
       <p className="mb-2 text-sm font-medium text-ink">{title}</p>
       {kind === "bars" ? (
-        points.some((item) => item.totalCents > 0) ? (
         <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={points}>
+            <BarChart data={points.length ? points : [{ name: "—", totalCents: 0 }]}>
               <CartesianGrid stroke="var(--line)" vertical={false} />
               <XAxis dataKey="name" stroke="var(--muted)" fontSize={11} tickLine={false} axisLine={false} interval={0} />
-              <YAxis stroke="var(--muted)" fontSize={11} tickFormatter={axis} tickLine={false} axisLine={false} width={52} />
+              <YAxis stroke="var(--muted)" fontSize={11} tickFormatter={axis} tickLine={false} axisLine={false} width={52} domain={[0, Math.max(1, ...points.map((item) => item.totalCents))]} />
               <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
-              <Bar dataKey="totalCents" radius={[6, 6, 0, 0]}>
-                {points.map((item, index) => <Cell key={item.name} fill={palette[index % palette.length]} />)}
+              <Bar dataKey="totalCents" radius={[6, 6, 0, 0]} minPointSize={8}>
+                {(points.length ? points : [{ name: "—", totalCents: 0 }]).map((item, index) => <Cell key={item.name} fill={palette[index % palette.length]} />)}
                 <LabelList dataKey="totalCents" position="top" formatter={(value: number) => formatBRL(Number(value))} style={{ fill: "var(--ink)", fontSize: 11 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
-        ) : <BarPreview />
-      ) : <PieBlock data={points} emptyNames={points.map((item) => item.name)} />}
+      ) : <PieBlock data={points.length ? points : [{ name: "Sem despesas", totalCents: 0 }]} />}
     </div>
   );
 }
@@ -142,32 +82,32 @@ export function MonthPie({ receivedCents, spentCents, futureCents }: { receivedC
     { name: "Já paguei", totalCents: spentCents },
     { name: "Ainda vou pagar", totalCents: futureCents },
   ];
-  return <PieBlock data={data} emptyNames={["Já recebi", "Já paguei", "Ainda vou pagar"]} keepZeros />;
+  return <PieBlock data={data} keepZeros />;
 }
 
 export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: number; expenseCents: number }> }) {
-  if (!data.length) return <BarPreview />;
-  const latest = data[data.length - 1];
-  const peak = Math.max(1, ...data.flatMap((item) => [item.incomeCents, item.expenseCents]));
+  const rows = data.length ? data : [{ label: "—", incomeCents: 0, expenseCents: 0 }];
+  const latest = rows[rows.length - 1];
+  const peak = Math.max(1, ...rows.flatMap((item) => [item.incomeCents, item.expenseCents]));
   return (
     <div>
     <div className="h-64 min-w-0 sm:h-72">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data}>
+        <BarChart data={rows}>
           <CartesianGrid stroke="var(--line)" vertical={false} />
           <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
           <YAxis stroke="var(--muted)" fontSize={10} tickFormatter={axis} tickLine={false} axisLine={false} width={40} domain={[0, peak]} />
-          <Tooltip formatter={(value: number, name: string) => [formatBRL(Number(value)), name === "incomeCents" ? "Receitas" : "Despesas"]} contentStyle={tooltipStyle} />
-          <Legend formatter={(value) => (value === "incomeCents" ? "Receitas recebidas" : "Despesas do mês")} />
+          <Tooltip formatter={(value: number, name: string) => [formatBRL(Number(value)), name === "incomeCents" ? "Ganhos do mês" : "Gastos"]} contentStyle={tooltipStyle} />
+          <Legend formatter={(value) => (value === "incomeCents" ? "Ganhos do mês" : "Gastos")} />
           <Bar dataKey="incomeCents" fill="var(--income)" radius={[6, 6, 0, 0]} />
           <Bar dataKey="expenseCents" fill="var(--expense)" radius={[6, 6, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </div>
-      <p className="mt-3 text-sm">No mês mais recente, {latest?.label}: <strong className="text-income">{formatBRL(latest?.incomeCents ?? 0)}</strong> entraram e <strong className="text-expense">{formatBRL(latest?.expenseCents ?? 0)}</strong> saíram.</p>
+      <p className="mt-3 text-sm">No mês mais recente, {latest?.label}: <strong className="text-income">{formatBRL(latest?.incomeCents ?? 0)}</strong> entraram e <strong className="text-expense">{formatBRL(latest?.expenseCents ?? 0)}</strong> saíram ({shareLabel(latest?.expenseCents ?? 0, latest?.incomeCents ?? 0)}).</p>
       <div className="mt-2 divide-y divide-line text-sm">
-        {data.map((item) => (
-          <p key={item.label} className="flex flex-col gap-0.5 py-1.5 sm:flex-row sm:justify-between sm:gap-3"><span>{item.label}</span><span>{formatBRL(item.incomeCents)} entrou · {formatBRL(item.expenseCents)} saiu</span></p>
+        {rows.map((item) => (
+          <p key={item.label} className="flex flex-col gap-0.5 py-1.5 sm:flex-row sm:justify-between sm:gap-3"><span>{item.label}</span><span>{formatBRL(item.incomeCents)} entrou · {formatBRL(item.expenseCents)} saiu · {shareLabel(item.expenseCents, item.incomeCents)}</span></p>
         ))}
       </div>
     </div>
@@ -175,60 +115,61 @@ export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: 
 }
 
 export function SeriesChart({ data, dataKey, color, caption }: { data: Array<{ label: string; incomeCents: number; expenseCents: number }>; dataKey: "incomeCents" | "expenseCents"; color: string; caption: string }) {
-  const latest = data[data.length - 1];
-  if (!data.length) return <BarPreview />;
-  const peak = Math.max(1, ...data.map((item) => Number(item[dataKey])));
+  const rows = data.length ? data : [{ label: "—", incomeCents: 0, expenseCents: 0 }];
+  const latest = rows[rows.length - 1];
+  const peak = Math.max(1, ...rows.flatMap((item) => [Number(item[dataKey]), dataKey === "expenseCents" ? item.incomeCents : 0]));
   return (
     <div>
       <div className="h-64 min-w-0 sm:h-72">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
+          <BarChart data={rows}>
             <CartesianGrid stroke="var(--line)" vertical={false} />
             <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
             <YAxis stroke="var(--muted)" fontSize={10} tickFormatter={axis} tickLine={false} axisLine={false} width={40} domain={[0, peak]} />
-            <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
+            <Tooltip formatter={(value: number, name: string) => [formatBRL(Number(value)), name === "incomeCents" ? "Ganhos do mês" : "Valor"]} contentStyle={tooltipStyle} />
+            {dataKey === "expenseCents" ? <Bar dataKey="incomeCents" fill="var(--income)" radius={[6, 6, 0, 0]} /> : null}
             <Bar dataKey={dataKey} fill={color} radius={[6, 6, 0, 0]}>
               <LabelList dataKey={dataKey} position="top" formatter={(value: number) => formatBRL(Number(value))} style={{ fill: "var(--ink)", fontSize: 11 }} />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <p className="mt-3 text-sm">{caption} <strong>{formatBRL(Number(latest?.[dataKey] ?? 0))}</strong>.</p>
+      <p className="mt-3 text-sm">{caption} <strong>{formatBRL(Number(latest?.[dataKey] ?? 0))}</strong>{dataKey === "expenseCents" ? `, ${shareLabel(Number(latest?.expenseCents ?? 0), Number(latest?.incomeCents ?? 0))}.` : ". Este valor é o total de ganhos do mês, a medida dos gastos."}</p>
     </div>
   );
 }
 
-export function CategoryChart({ data }: { data: Array<{ name: string; totalCents: number; color: string }> }) {
+export function CategoryChart({ data, incomeCents = 0 }: { data: Array<{ name: string; totalCents: number; color: string }>; incomeCents?: number }) {
   const slices = data.filter((item) => item.totalCents > 0);
-  if (!slices.length) {
-    return (
-      <div className="grid h-64 place-items-center">
-        <p className="text-3xl font-semibold">{formatBRL(0)}</p>
-      </div>
-    );
-  }
-  return <PieBlock data={slices.map((item) => ({ name: item.name, totalCents: item.totalCents, color: item.color }))} emptyNames={[]} />;
+  const spent = slices.reduce((sum, item) => sum + item.totalCents, 0);
+  const left = Math.max(0, incomeCents - spent);
+  const compared = incomeCents > 0
+    ? [...slices, { name: "Sobrou dos ganhos", totalCents: left, color: "#3ecf8e" }]
+    : slices.length
+      ? slices
+      : [{ name: "Ganhos do mês", totalCents: 0, color: "#3ecf8e" }, { name: "Gastos do mês", totalCents: 0, color: "#f07178" }];
+  return <PieBlock data={compared} baseCents={incomeCents > 0 ? incomeCents : undefined} centerLabel="Ganhos" centerCents={incomeCents} keepZeros={incomeCents <= 0 && slices.length === 0} />;
 }
 
-export function BalanceChart({ data }: { data: Array<{ label: string; balanceCents: number; projectedCents: number }> }) {
-  if (!data.length) return <LinePreview />;
-  const latest = data[data.length - 1];
+export function BalanceChart({ data }: { data: Array<{ label: string; balanceCents: number; projectedCents: number; incomeCents?: number; expenseCents?: number }> }) {
+  const rows = data.length ? data : [{ label: "—", balanceCents: 0, projectedCents: 0 }];
+  const latest = rows[rows.length - 1];
   return (
     <div>
     <div className="h-64 min-w-0 sm:h-72">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data}>
+        <LineChart data={rows}>
           <CartesianGrid stroke="var(--line)" vertical={false} />
           <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
           <YAxis stroke="var(--muted)" fontSize={10} tickFormatter={axis} tickLine={false} axisLine={false} width={40} />
           <Tooltip formatter={(value: number, name: string) => [formatBRL(Number(value)), name === "balanceCents" ? "Saldo realizado" : "Saldo projetado"]} contentStyle={tooltipStyle} />
           <Legend formatter={(value) => (value === "balanceCents" ? "Realizado" : "Projetado")} />
-          <Line type="monotone" dataKey="balanceCents" stroke="var(--accent)" strokeWidth={2.4} dot={false} />
-          <Line type="monotone" dataKey="projectedCents" stroke="var(--warning)" strokeWidth={2.4} strokeDasharray="5 5" dot={false} />
+          <Line type="monotone" dataKey="balanceCents" stroke="var(--accent)" strokeWidth={2.4} dot={{ r: 3, fill: "var(--accent)" }} />
+          <Line type="monotone" dataKey="projectedCents" stroke="var(--warning)" strokeWidth={2.4} strokeDasharray="5 5" dot={{ r: 3, fill: "var(--warning)" }} />
         </LineChart>
       </ResponsiveContainer>
     </div>
-      <p className="mt-3 text-sm">Saldo realizado mais recente: <strong>{formatBRL(latest?.balanceCents ?? 0)}</strong>. Projeção: <strong>{formatBRL(latest?.projectedCents ?? 0)}</strong>.</p>
+      <p className="mt-3 text-sm">Saldo realizado mais recente: <strong>{formatBRL(latest?.balanceCents ?? 0)}</strong>. Projeção: <strong>{formatBRL(latest?.projectedCents ?? 0)}</strong>. Gastos frente aos ganhos: {shareLabel(latest?.expenseCents ?? 0, latest?.incomeCents ?? 0)}.</p>
     </div>
   );
 }

@@ -90,6 +90,26 @@ export function monthIncome(transactions: Transaction[], month: string, mode: "r
   }, 0);
 }
 
+export function unpaidInstallmentCents(transactions: Transaction[], month: string): number {
+  const { start, end } = monthRange(month);
+  return transactions.reduce((sum, transaction) => {
+    if (transaction.type !== "expense" || transaction.creditCardId || (!transaction.installmentGroupId && !transaction.recurrenceId)) return sum;
+    if (transaction.status === "paid") return sum;
+    if (!isWithin(transaction.occurredOn, start, end)) return sum;
+    return sum + transaction.amountCents;
+  }, 0);
+}
+
+export function appendInstallmentMonths(data: FinanceData, history: HistoryPoint[], today: string, limit = 12): HistoryPoint[] {
+  const last = history[history.length - 1]?.month ?? "";
+  const future = [...new Set(data.transactions
+    .filter((item) => (item.installmentGroupId || item.recurrenceId) && item.occurredOn.slice(0, 7) > last)
+    .map((item) => item.occurredOn.slice(0, 7)))]
+    .sort()
+    .slice(0, limit);
+  return [...history, ...future.flatMap((month) => monthlyHistory(data, month, today, 1))];
+}
+
 export function monthSpending(transactions: Transaction[], month: string): number {
   const { start, end } = monthRange(month);
   return transactions.reduce((sum, transaction) => {
@@ -161,7 +181,7 @@ export function monthlyHistory(data: FinanceData, month: string, today: string, 
       month: key,
       label: `${formatMonthShort(key)}/${key.slice(2, 4)}`,
       incomeCents: monthIncome(data.transactions, key, "received"),
-      expenseCents: monthSpending(data.transactions, key),
+      expenseCents: monthSpending(data.transactions, key) + unpaidInstallmentCents(data.transactions, key),
       balanceCents: totalBalance(data.accounts, data.transactions, isCurrent ? today : range.end),
       projectedCents: isFuture || isCurrent ? projectCash(data, range.end, today) : totalBalance(data.accounts, data.transactions, range.end),
     });

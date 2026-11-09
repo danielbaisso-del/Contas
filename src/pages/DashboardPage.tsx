@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { BalanceChart, CategoryChart, FlowChart } from "@/components/Charts";
 import { MoneyText } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
-import { accountBalance, buildDashboard, invoiceTotal } from "@/finance/engine";
+import { accountBalance, appendInstallmentMonths, buildDashboard, invoiceTotal } from "@/finance/engine";
 import { formatDateBR, formatMonthLabel, monthKey, monthRange, shiftMonth } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 
@@ -25,6 +25,7 @@ export function DashboardPage() {
   }, [location.hash, month]);
 
   const model = useMemo(() => buildDashboard(data, month, today), [data, month, today]);
+  const chartHistory = useMemo(() => appendInstallmentMonths(data, model.history, today), [data, model.history, today]);
   const toReceive = data.transactions.filter((item) => item.type === "income" && item.status !== "received");
   const toPay = data.transactions.filter((item) => item.type === "expense" && !item.creditCardId && item.status !== "paid");
   const receiveCents = toReceive.reduce((sum, item) => sum + item.amountCents, 0);
@@ -115,18 +116,18 @@ export function DashboardPage() {
       <section id="graficos" className="grid scroll-mt-24 gap-4 xl:grid-cols-2">
         <article className="rounded-3xl border border-line bg-surface p-5">
           <h2 className="font-semibold">Despesas por categoria</h2>
-          <p className="mb-4 mt-1 text-sm text-muted">Cada fatia é uma categoria de {formatMonthLabel(month)}, com o valor lançado.</p>
-          <CategoryChart data={model.categories} />
+          <p className="mb-4 mt-1 text-sm text-muted">A pizza inteira é o total de ganhos de {formatMonthLabel(month)}. Cada fatia é o que uma categoria consumiu desses ganhos.</p>
+          <CategoryChart data={model.categories} incomeCents={model.incomeCents} />
         </article>
         <article className="rounded-3xl border border-line bg-surface p-5">
           <h2 className="font-semibold">Receitas e despesas</h2>
-          <p className="mb-4 mt-1 text-sm text-muted">Os últimos meses, lado a lado. Verde entra, vermelho sai.</p>
-          <FlowChart data={model.history} />
+          <p className="mb-4 mt-1 text-sm text-muted">Verde é o total de ganhos do mês. Vermelho é o gasto medido por esse total.</p>
+          <FlowChart data={chartHistory} />
         </article>
         <article className="rounded-3xl border border-line bg-surface p-5 xl:col-span-2">
           <h2 className="font-semibold">Evolução do saldo</h2>
           <p className="mb-4 mt-1 text-sm text-muted">A linha contínua é o que já aconteceu. A tracejada é a projeção.</p>
-          <BalanceChart data={model.history} />
+          <BalanceChart data={chartHistory} />
         </article>
       </section>
 

@@ -4,10 +4,24 @@ import { matchByName, normalizeText } from "@/lib/utils";
 import type { InterviewState } from "@/domain/assistant";
 import type { Account, FinanceData } from "@/types/models";
 
+export function readInstallmentCount(text: string): number | null {
+  const match = text.match(/\b(\d{1,2})\s*x\b/i)
+    ?? text.match(/\b(\d{1,2})\s*parcelas?\b/i)
+    ?? text.match(/\bem\s+(\d{1,2})\s+vezes\b/i);
+  if (!match) return null;
+  const count = Number(match[1]);
+  return count >= 2 && count <= 48 ? count : null;
+}
+
+export function wantsFixedBill(text: string): boolean {
+  return /\b(conta fixa|todo mes|todos os meses|repete todo|fixa todo)\b/.test(normalizeText(text));
+}
+
 export function readAmountCents(text: string): number | null {
-  const explicit = resolveAmountCents(text, null);
+  const withoutPlan = text.replace(/\b\d{1,2}\s*(?:x|parcelas?|vezes)\b/gi, " ");
+  const explicit = resolveAmountCents(withoutPlan, null);
   if (explicit) return explicit;
-  const stripped = text
+  const stripped = withoutPlan
     .replace(/\b\d{1,2}[/\-.]\d{1,2}(?:[/\-.]\d{2,4})?\b/g, " ")
     .replace(/\bdia\s+\d{1,2}\b/gi, " ")
     .replace(/\b(19|20)\d{2}\b/g, " ");
@@ -41,7 +55,7 @@ function sourceText(text: string, accounts: Account[]): string {
     .replace(/\b\d{1,2}[/\-.]\d{1,2}(?:[/\-.]\d{2,4})?\b/g, " ")
     .replace(/\b(hoje|ontem|amanh[aã]|dia)\s*\d{0,2}\b/gi, " ")
     .replace(/\b\d{1,7}(?:[.,]\d{1,2})?\b/g, " ")
-    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|devo|devendo|tenho|falta|quero|lancar|lan[cç]ar|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s)\b/gi, " ")
+    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|devo|devendo|tenho|falta|quero|lancar|lan[cç]ar|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s|todo|todos|fixa|fixo|parcela|parcelas|parcelada|parcelado|vezes)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
@@ -76,6 +90,7 @@ export function inferEntry(text: string): "income" | "paid" | "upcoming" | null 
     return null;
   }
   if (/\b(paguei|gastei|comprei|despesa)\b/.test(normalized)) return "paid";
+  if (wantsFixedBill(text) || readInstallmentCount(text) != null) return readAmountCents(text) == null && /^(quanto|qual|quais)\b/.test(normalized) ? null : "upcoming";
   return null;
 }
 
@@ -97,7 +112,13 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
     occurredOn: current?.kind === kind ? current.occurredOn : null,
     description: current?.kind === kind ? current.description : null,
     accountId: current?.kind === kind ? current.accountId : null,
+    installments: current?.kind === kind ? current.installments ?? null : null,
+    fixed: current?.kind === kind ? current.fixed === true : false,
   };
+  const counted = readInstallmentCount(text);
+  if (counted) state.installments = counted;
+  if (wantsFixedBill(text)) state.fixed = true;
+  if ((state.installments ?? 1) > 1) state.fixed = false;
   if (state.accountId && !accounts.some((account) => account.id === state.accountId)) state.accountId = null;
   const normalized = normalizeText(text);
   if (state.amountCents != null && /\b(muda|altera|corrige|valor)\b/.test(normalized)) {

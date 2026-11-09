@@ -6,7 +6,7 @@ import { Button, Field, Input, MoneyText, PageHeader } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
 import type { AssistantResponse } from "@/domain/assistant";
-import { buildDashboard } from "@/finance/engine";
+import { appendInstallmentMonths, buildDashboard } from "@/finance/engine";
 import { formatDateBR, formatMonthLabel, monthKey, shiftMonth } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 import { errorMessage } from "@/lib/utils";
@@ -103,6 +103,7 @@ export function HouseholdPage() {
   }
 
   const model = useMemo(() => (finance ? buildDashboard(finance.data, month, today) : null), [finance, month, today]);
+  const chartHistory = useMemo(() => (finance && model ? appendInstallmentMonths(finance.data, model.history, today) : []), [finance, model, today]);
   const people = useMemo(() => (finance ? finance.parts.map((part) => {
     const dash = buildDashboard(part.data, month, today);
     return { name: part.name, incomeCents: dash.incomeCents, spendingCents: dash.spendingCents, pendingCents: dash.pendingCents };
@@ -205,8 +206,8 @@ export function HouseholdPage() {
           <section id="mes" key={month} className="grid gap-4 xl:grid-cols-2">
             <article id="categorias" className="min-w-0 rounded-3xl border border-line bg-surface p-5">
               <h2 className="font-semibold">Despesas por categoria</h2>
-              <p className="mb-4 mt-1 text-sm text-muted">Categorias iguais das duas pessoas viram uma fatia só.</p>
-              <CategoryChart data={model.categories} />
+              <p className="mb-4 mt-1 text-sm text-muted">A pizza inteira é o total de ganhos do grupo. Cada fatia é o que a categoria consumiu desses ganhos.</p>
+              <CategoryChart data={model.categories} incomeCents={model.incomeCents} />
             </article>
             <article id="pessoas" className="rounded-3xl border border-line bg-surface p-5">
               <h2 className="font-semibold">Cada pessoa</h2>
@@ -216,7 +217,7 @@ export function HouseholdPage() {
             <article id="evolucao" className="min-w-0 rounded-3xl border border-line bg-surface p-5 xl:col-span-2">
               <h2 className="font-semibold">Para onde o saldo vai</h2>
               <p className="mb-4 mt-1 text-sm text-muted">A linha junta as contas de quem aceitou. Transferência entre vocês não muda o total.</p>
-              <BalanceChart data={model.history} />
+              <BalanceChart data={chartHistory} />
             </article>
           </section>
 

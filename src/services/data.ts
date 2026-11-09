@@ -185,6 +185,7 @@ export async function createBankInstallments(input: {
   accountId: string;
   paymentMethod?: string | null;
   notes?: string | null;
+  firstPaid?: boolean;
 }): Promise<void> {
   const userId = await requireUserId();
   const today = todayISO();
@@ -197,7 +198,7 @@ export async function createBankInstallments(input: {
       type: "expense",
       occurredOn: part.occurredOn,
       dueOn: part.dueOn,
-      status: part.occurredOn > today ? "planned" : "pending",
+      status: part.number === 1 && input.firstPaid ? "paid" : part.occurredOn > today ? "planned" : "pending",
       categoryId: input.categoryId,
       accountId: input.accountId,
       paymentMethod: input.paymentMethod,

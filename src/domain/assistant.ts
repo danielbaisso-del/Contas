@@ -108,6 +108,8 @@ export interface InterviewState {
   occurredOn: string | null;
   description: string | null;
   accountId: string | null;
+  installments?: number | null;
+  fixed?: boolean;
 }
 
 export interface AssistantResponse {

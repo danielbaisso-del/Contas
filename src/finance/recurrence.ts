@@ -51,7 +51,18 @@ export function generatedStatus(occurredOn: string, today = todayISO()): "planne
 
 export function generationWindow(today = todayISO()): { from: string; until: string } {
   return {
-    from: `${today.slice(0, 7)}-01`,
-    until: addMonthsKeepingDay(today, 12, parseISODate(today).getDate()),
+    from: addMonthsKeepingDay(`${today.slice(0, 7)}-01`, -5, 1),
+    until: addMonthsKeepingDay(today, 24, parseISODate(today).getDate()),
   };
+}
+
+export function fixedBillDates(startOn: string, today = todayISO()): string[] {
+  const { from, until } = generationWindow(today);
+  return recurrenceDates({
+    frequency: "monthly",
+    interval: 1,
+    startOn,
+    endOn: null,
+    dayOfMonth: Number(startOn.slice(8, 10)),
+  }, from, until);
 }

@@ -58,6 +58,18 @@ describe("entrevista da IA", () => {
     expect(result.question).toMatch(/criar a categoria Petshop/i);
   });
 
+  it("guarda conta fixa e o número de parcelas sem confundir com o valor", () => {
+    const fixed = conductInterview("upcoming", "conta fixa de internet 120", null, data, "2026-11-09");
+    expect(fixed.state.fixed).toBe(true);
+    expect(fixed.state.amountCents).toBe(12000);
+    expect(fixed.state.description).toBe("Internet");
+    const parts = conductInterview("upcoming", "geladeira em 3 parcelas de 1200", null, data, "2026-11-09");
+    expect(parts.state.installments).toBe(3);
+    expect(parts.state.fixed).toBe(false);
+    expect(parts.state.amountCents).toBe(120000);
+    expect(parts.state.description).toBe("Geladeira");
+  });
+
   it("aceita valor, origem, data e conta na mesma frase", () => {
     const result = conductInterview("paid", "paguei 150 de internet hoje na Caixa", null, data, "2026-11-09");
     expect(result.ready).toBe(true);
