@@ -3,6 +3,9 @@ import { todayISO } from "@/lib/dates";
 import { errorMessage } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
+import { invoiceTotal } from "@/finance/engine";
+import { formatBRL } from "@/lib/money";
+import { notifyDueToday } from "@/lib/dueNotice";
 import { loadWorkspace } from "@/services/data";
 import { syncRecurrences } from "@/services/sync";
 import type { FinanceData, Profile } from "@/types/models";
@@ -53,6 +56,17 @@ export function FinanceProvider({ children }: { children: ReactNode }) {
       }
       setData(workspace.data);
       setProfile(workspace.profile);
+      const due = [
+        ...workspace.data.transactions
+          .filter((item) => item.type === "expense" && !item.creditCardId && item.status !== "paid" && (item.dueOn || item.occurredOn) === today)
+          .map((item) => ({ id: item.id, title: item.description, amount: formatBRL(item.amountCents) })),
+        ...workspace.data.invoices
+          .filter((invoice) => invoice.status !== "paid" && invoice.dueOn === today)
+          .map((invoice) => ({ id: invoice.id, title: "Fatura do cartão", cents: invoiceTotal(invoice.id, workspace.data.transactions) }))
+          .filter((invoice) => invoice.cents > 0)
+          .map((invoice) => ({ id: invoice.id, title: invoice.title, amount: formatBRL(invoice.cents) })),
+      ];
+      void notifyDueToday(due, today);
       setError(null);
       setReady(true);
     } catch (loadError) {

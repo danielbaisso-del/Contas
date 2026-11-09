@@ -365,6 +365,13 @@ export async function saveRecurrence(input: RecurrenceInput, id?: string): Promi
   const { error } = id ? await supabase.from("recurrences").update(row).eq("id", id) : await supabase.from("recurrences").insert(row);
   if (error) throw new Error(friendlyDbError(error));
   if (id) {
+    const { error: resetError } = await supabase
+      .from("transactions")
+      .delete()
+      .eq("recurrence_id", id)
+      .in("status", ["planned", "pending"])
+      .gte("occurred_on", todayISO());
+    if (resetError) throw new Error(friendlyDbError(resetError));
     const { error: futureError } = await supabase
       .from("transactions")
       .update({

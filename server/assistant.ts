@@ -1,10 +1,11 @@
 import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantPlace, type AssistantResponse, type InterviewState, type TransactionDraft } from "@/domain/assistant";
-import { conductInterview, explicitDate, readAmountCents } from "@/domain/interview";
-import { resolveAmountCents, resolveOccurredOn, suggestCategory } from "@/domain/resolveText";
+import { groundLaunch, groundTransfer, type GroundLaunch, type UnderstoodDraft } from "@/domain/ground";
+import { conductInterview, continuesInterview, explicitDate, inferEntry, readAmountCents } from "@/domain/interview";
+import { resolveAmountCents, suggestCategory } from "@/domain/resolveText";
 import { buildDashboard } from "@/finance/engine";
 import { planBankInstallments, planCardInstallments, installmentsForDatabase } from "@/finance/installments";
 import { formatDateBR, monthKey, todayISO } from "@/lib/dates";
-import { accountTypeLabel, COLORS, paymentMethodLabel, statusLabel } from "@/lib/labels";
+import { accountTypeLabel, COLORS } from "@/lib/labels";
 import { formatBRL, parseMoneyToCents } from "@/lib/money";
 import { matchByName, normalizeText } from "@/lib/utils";
 import { mapAccount, mapCard, mapCategory, mapInvoice, mapRecurrence, mapTransaction } from "@/services/mappers";
@@ -15,38 +16,33 @@ import { geminiJson, parseModelJson } from "./gemini";
 import { HttpError, readJson, sendJson, type NodeRequest, type NodeResponse } from "./http";
 import { consumeAiQuota, requireUser, userClient } from "./supabase";
 
-const SYSTEM = `Você interpreta pedidos do Assistente Financeiro do aplicativo Contas.
-Devolva somente JSON. Não calcule saldo, não invente valor e não escreva SQL.
-Datas em YYYY-MM-DD. amount_cents é inteiro em centavos: R$ 85 vira 8500 e R$ 1.500,50 vira 150050.
-Recebi ou salário = income. Gastei, paguei ou comprei = expense. Transferi entre contas = create_transfer.
-Pergunta sobre saldo, gasto, sobra, categoria, previsão ou "posso comprar" = query. Não responda o número. Qualquer pergunta sobre os dados da pessoa é query, mesmo que não peça para lançar.
-Se faltar dado para lançar, use action clarify.
+const SYSTEM = `Você é a conversa do aplicativo Contas. Entenda qualquer frase em português, como uma IA normal, e devolva somente JSON.
+Não calcule saldo, não invente valor e não escreva SQL. amount_cents só se a pessoa falou o número: R$ 85 vira 8500.
+message é uma frase curta do que você entendeu, sem valor em reais e sem dizer que já salvou.
+Se a pessoa quer gravar receita, despesa, conta a pagar ou compra, use create_transaction e preencha description, type, status, category_name, account_name e card_name com as palavras dela.
+Recebi = income received. Paguei, gastei ou comprei = expense paid. Devo, falta pagar ou conta a pagar = expense pending.
+Transferência entre contas = create_transfer. Pergunta sobre os números dela = query, sem responder o número.
+Conversa, explicação ou pedido que não é número nem lançamento = chat.
+query.metric pode ser available_balance, month_overview, forecast, category_total, upcoming, can_afford, account_balance, debt, open_items ou cards.
 Formato:
-{"action":"chat|clarify|create_transaction|create_transfer|query","message":"","missing":[],"draft":{"description":"","amount_cents":0,"type":"expense","occurred_on":"","due_on":null,"category_name":null,"account_name":null,"card_name":null,"payment_method":null,"notes":null,"status":null,"installments":1},"transfer":{"description":"Transferência","amount_cents":0,"occurred_on":"","from_account_name":"","to_account_name":""},"query":{"metric":"available_balance|month_overview|forecast|category_total|upcoming|can_afford|account_balance","category_name":null,"account_name":null,"month":null,"months":null,"days":null,"amount_cents":null,"installments":null,"payment":null,"starting_on":null}}`;
+{"action":"chat|clarify|create_transaction|create_transfer|query","message":"","missing":[],"draft":{"description":"","amount_cents":0,"type":"expense","occurred_on":"","due_on":null,"category_name":null,"account_name":null,"card_name":null,"payment_method":null,"notes":null,"status":null,"installments":1},"transfer":{"description":"Transferência","amount_cents":0,"occurred_on":"","from_account_name":"","to_account_name":""},"query":{"metric":"available_balance|month_overview|forecast|category_total|upcoming|can_afford|account_balance|debt|open_items|cards","category_name":null,"account_name":null,"month":null,"months":null,"days":null,"amount_cents":null,"installments":null,"payment":null,"starting_on":null}}`;
 
 function forcedQuery(text: string) {
   const lower = normalizeText(text);
-  if (/cartao|fatura/.test(lower)) return { metric: "cards" as const };
+  if (/cartao|fatura/.test(lower) && !/o que e|o que significa|explica|como funciona/.test(lower) && readAmountCents(text) == null && !inferEntry(text)) return { metric: "cards" as const };
   if (/posso comprar|se eu comprar|cabe no orcamento/.test(lower)) return { metric: "can_afford" as const };
   if (/vai sobrar|fim do mes|saldo previsto|previsao|proximos dias|\b30 dias\b|\b60 dias\b|\b90 dias\b/.test(lower)) return { metric: "forecast" as const };
   if (/quanto gastei com|gastos com|gastei com/.test(lower)) return { metric: "category_total" as const };
-  if (/quanto (eu )?estou devendo|quanto devo|divida|contas a pagar|o que tenho para pagar/.test(lower)) return { metric: "debt" as const };
-  if (/ainda vou receber|contas a receber|receber e pagar|o que falta/.test(lower)) return { metric: "open_items" as const };
+  if (/quanto (eu )?estou devendo|quanto estamos devendo|quanto (eu )?devo|quanto devemos|divida|contas a pagar|o que (eu )?tenho para pagar|o que temos para pagar/.test(lower)) return { metric: "debt" as const };
+  if (/ainda vou receber|ainda vamos receber|contas a receber|receber e pagar|o que falta/.test(lower)) return { metric: "open_items" as const };
   if (/proximas contas/.test(lower)) return { metric: "upcoming" as const };
-  if (/quanto tenho|quanto eu tenho|dinheiro tenho|saldo atual|\bsaldo\b/.test(lower)) return { metric: "available_balance" as const };
-  if (/quanto recebi|receitas do mes|quanto gastei|despesas do mes|grafico|relatorio|como esta o mes|resumo/.test(lower)) return { metric: "month_overview" as const };
+  if (/quanto tenho|quanto eu tenho|quanto temos|dinheiro tenho|dinheiro temos|saldo atual|\bsaldo\b/.test(lower)) return { metric: "available_balance" as const };
+  if (/quanto recebi|quanto recebemos|receitas do mes|quanto gastei|quanto gastamos|despesas do mes|grafico|relatorio|como esta o mes|resumo/.test(lower)) return { metric: "month_overview" as const };
   return null;
 }
 
 function wantsNewAccount(text: string): boolean {
   return /\b(cadastrar uma conta|nova conta|criar uma conta|criar conta)\b/.test(normalizeText(text));
-}
-
-function inferType(text: string): "income" | "expense" | null {
-  const lower = normalizeText(text);
-  if (/recebi|receber|salario|cliente pagou|entrou/.test(lower)) return "income";
-  if (/gastei|gasto|paguei|pagar|comprei|compra|despesa/.test(lower)) return "expense";
-  return null;
 }
 
 function inferInstallments(text: string): number | null {
@@ -88,72 +84,6 @@ async function loadData(token: string): Promise<FinanceData> {
   };
 }
 
-function buildTransaction(text: string, draft: NonNullable<Awaited<ReturnType<typeof interpretIntent>>>["draft"], data: FinanceData, today: string): AssistantResponse {
-  const type = draft?.type ?? inferType(text);
-  if (!type) return { reply: "Isso é uma receita ou uma despesa?", confirmation: null };
-  const amount = resolveAmountCents(text, draft?.amount_cents);
-  if (!amount) return { reply: "Qual é o valor? Escreva, por exemplo, R$ 85,00.", confirmation: null };
-  const description = (draft?.description ?? "").trim() || text.replace(/R\$\s*[\d.,]+/g, "").trim();
-  if (description.trim().length < 2) return { reply: "Como você quer chamar esse lançamento?", confirmation: null };
-  const occurred = resolveOccurredOn(text, today, draft?.occurred_on);
-  const installments = Math.min(48, Math.max(1, Math.round(draft?.installments || inferInstallments(text) || 1)));
-  const accounts = data.accounts.filter((account) => !account.archived);
-  const cards = data.cards.filter((card) => !card.archived);
-  const wantsCard = draft?.payment_method === "credit" || Boolean(draft?.card_name) || /cart[aã]o/i.test(text);
-  let card = matchByName(cards, draft?.card_name);
-  let account = matchByName(accounts, draft?.account_name);
-  if (wantsCard && !card && cards.length === 1) card = cards[0] ?? null;
-  if (!card && !account && accounts.length === 1) account = accounts[0] ?? null;
-  if (type === "income" && !account) {
-    return { reply: accounts.length ? `Entendi uma receita de ${formatBRL(amount)}. Em qual conta ela entra? Você tem: ${accounts.map((item) => item.name).join(", ")}.` : "Cadastre uma conta antes. A receita precisa ter onde entrar.", confirmation: null };
-  }
-  if (type === "expense" && wantsCard && !card) {
-    return { reply: cards.length ? `Entendi a compra de ${formatBRL(amount)}. Qual cartão? Você tem: ${cards.map((item) => item.name).join(", ")}.` : "Você ainda não cadastrou um cartão. Pode lançar em uma conta ou criar o cartão antes.", confirmation: null };
-  }
-  if (type === "expense" && !card && !account) {
-    return { reply: accounts.length ? `Entendi a despesa de ${formatBRL(amount)}. De qual conta saiu? Você tem: ${accounts.map((item) => item.name).join(", ")}.` : "Cadastre uma conta antes de lançar essa despesa.", confirmation: null };
-  }
-  const category = suggestCategory(text, data.categories, type, draft?.category_name);
-  const requested = draft?.status;
-  const status = type === "income"
-    ? requested === "planned" || requested === "pending" || requested === "received" ? requested : occurred.date > today ? "planned" : "received"
-    : requested === "planned" || requested === "pending" || requested === "paid" ? requested : occurred.date > today ? "planned" : "paid";
-  const safeDescription = description.trim().slice(0, 140);
-  const transaction: TransactionDraft = {
-    description: safeDescription,
-    amount_cents: amount,
-    type,
-    occurred_on: occurred.date,
-    due_on: draft?.due_on && /^\d{4}-\d{2}-\d{2}$/.test(draft.due_on) ? draft.due_on : null,
-    status,
-    category_id: category?.id ?? null,
-    account_id: card ? null : account?.id ?? null,
-    card_id: card?.id ?? null,
-    payment_method: card ? "credit" : draft?.payment_method ?? null,
-    notes: draft?.notes?.slice(0, 500) ?? null,
-    installments,
-  };
-  const lines = [
-    `${type === "income" ? "Receita" : "Despesa"} de ${formatBRL(amount)}`,
-    `Descrição: ${safeDescription}`,
-    `Data: ${formatDateBR(occurred.date)}${occurred.assumed ? " — usei hoje porque a frase não trouxe outra data" : ""}`,
-    `Categoria: ${category?.name ?? "sem categoria"}`,
-    card ? `Cartão: ${card.name}. A compra não sai da conta agora; ela entra na fatura.` : `Conta: ${account?.name ?? "—"}`,
-    installments > 1 ? `${installments} parcelas` : "À vista",
-    `Status: ${statusLabel(status, type)}`,
-    transaction.payment_method ? `Forma: ${paymentMethodLabel(transaction.payment_method)}` : "",
-  ].filter(Boolean);
-  return {
-    reply: "Separei a prévia abaixo. Nada foi salvo. Confira os campos e confirme só se estiver certo.",
-    confirmation: {
-      kind: card ? "card_purchase" : installments > 1 ? "bank_installments" : "transaction",
-      title: "Prévia do lançamento",
-      lines,
-      draft: transaction,
-    },
-  };
-}
-
 async function interpretIntent(prompt: string) {
   const first = parseModelJson(await geminiJson(prompt, SYSTEM));
   const parsed = intentSchema.safeParse(first);
@@ -162,34 +92,6 @@ async function interpretIntent(prompt: string) {
   const again = intentSchema.safeParse(second);
   if (!again.success) throw new HttpError(422, "Não consegui organizar esse pedido. Tente uma frase direta, como: gastei R$ 85 no mercado hoje.");
   return again.data;
-}
-
-function buildTransfer(text: string, raw: NonNullable<Awaited<ReturnType<typeof interpretIntent>>>["transfer"], data: FinanceData, today: string): AssistantResponse {
-  const amount = resolveAmountCents(text, raw?.amount_cents);
-  if (!amount) return { reply: "Qual valor você quer transferir?", confirmation: null };
-  const accounts = data.accounts.filter((account) => !account.archived);
-  const from = matchByName(accounts, raw?.from_account_name);
-  const to = matchByName(accounts, raw?.to_account_name);
-  if (!from || !to) {
-    return { reply: `Entre quais contas? Você tem: ${accounts.map((account) => account.name).join(", ") || "nenhuma conta"}.`, confirmation: null };
-  }
-  if (from.id === to.id) return { reply: "Escolha duas contas diferentes. Transferência não é receita nem despesa.", confirmation: null };
-  const occurred = resolveOccurredOn(text, today, raw?.occurred_on);
-  return {
-    reply: "A transferência só muda o lugar do dinheiro. Ela não entra como receita nem como despesa. Confirme para salvar.",
-    confirmation: {
-      kind: "transfer",
-      title: "Prévia da transferência",
-      lines: [`${formatBRL(amount)} de ${from.name} para ${to.name}`, `Data: ${formatDateBR(occurred.date)}`],
-      draft: {
-        description: raw?.description?.trim() || `Transferência para ${to.name}`,
-        amount_cents: amount,
-        occurred_on: occurred.date,
-        from_account_id: from.id,
-        to_account_id: to.id,
-      },
-    },
-  };
 }
 
 function amountFromSpeech(text: string): number | null {
@@ -385,13 +287,20 @@ function householdPlace(metric: string) {
 
 async function answerHousehold(userId: string, email: string, text: string, today: string, res: NodeResponse): Promise<void> {
   const bundle = await householdBundle(userId, email);
-  if (!bundle) throw new HttpError(400, "Aceite um convite para a IA olhar as contas juntas.");
+  if (!bundle) {
+    sendJson(res, 200, {
+      reply: "Ainda não há um grupo aceito. Envie o convite pelo e-mail e espere a outra pessoa aceitar. Até lá eu olho só a sua conta, na bolha das outras telas.",
+      place: { label: "Voltar para o convite", to: "/conjunto" },
+      confirmation: null,
+    });
+    return;
+  }
   const normalized = normalizeText(text);
   const writing = /\b(adicione|adiciona|lanca|lancar|cadastr|recebi|gastei|paguei|comprei|transfere|transferi)\b/.test(normalized) && !isQuestion(text);
   if (writing) {
     sendJson(res, 200, {
       reply: "Nesta aba eu não gravo lançamento. Cada pessoa lança na própria conta. Depois que salvar, o valor entra aqui nos gráficos do grupo.",
-      place: { label: "Lançar na minha conta", to: "/lancamentos?novo=1" },
+      place: { label: "Lançar na minha conta", to: "/despesas?novo=1" },
       confirmation: null,
     });
     return;
@@ -427,7 +336,7 @@ async function answerHousehold(userId: string, email: string, text: string, toda
       if (intent.action === "create_transaction" || intent.action === "create_transfer") {
         sendJson(res, 200, {
           reply: "Nesta aba eu não gravo lançamento. Cada pessoa lança na própria conta. Depois que salvar, o valor entra aqui nos gráficos do grupo.",
-          place: { label: "Lançar na minha conta", to: "/lancamentos?novo=1" },
+          place: { label: "Lançar na minha conta", to: "/despesas?novo=1" },
           confirmation: null,
         });
         return;
@@ -461,19 +370,24 @@ function readInterview(value: unknown): InterviewState | null {
   };
 }
 
-function inferEntry(text: string): InterviewState["kind"] | null {
-  const normalized = normalizeText(text);
-  if (/\b(recebi|receber|entrou|ganhei|receita)\b/.test(normalized)) return "income";
-  if (/\b(vou pagar|ainda vou|vai vencer|vence dia|vence em|conta a pagar)\b/.test(normalized)) return "upcoming";
-  if (/\b(paguei|gastei|comprei|despesa)\b/.test(normalized)) return "paid";
-  return null;
-}
-
 function chartPlace(month: string): AssistantPlace {
   return { label: "Ver no gráfico", to: `/?mes=${month}#graficos` };
 }
 
-async function saveInterview(token: string, state: InterviewState, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace }> {
+async function ensureCategory(token: string, userId: string, name: string, kind: "income" | "expense", used: number): Promise<{ id: string; name: string }> {
+  const client = userClient(token);
+  const clean = name.trim().slice(0, 40);
+  const { data, error } = await client.from("categories").insert({
+    user_id: userId,
+    name: clean,
+    kind,
+    color: COLORS[used % COLORS.length] ?? COLORS[0],
+  }).select("id").single();
+  if (error || !data) throw new HttpError(400, "Não consegui criar a categoria.");
+  return { id: String(data.id), name: clean };
+}
+
+async function saveInterview(token: string, userId: string, state: InterviewState, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace }> {
   const occurred = state.occurredOn ?? today;
   const type = state.kind === "income" ? "income" : "expense";
   const status = state.kind === "income"
@@ -481,7 +395,12 @@ async function saveInterview(token: string, state: InterviewState, data: Finance
     : state.kind === "paid"
       ? (occurred > today ? "planned" as const : "paid" as const)
       : (occurred > today ? "planned" as const : "pending" as const);
-  const category = suggestCategory(state.description ?? "", data.categories, type, state.description);
+  const matched = suggestCategory(state.description ?? "", data.categories, type, state.description);
+  const category = matched ?? (state.description ? await ensureCategory(token, userId, state.description, type, data.categories.length) : null);
+  const categoryLine = matched ? `Categoria: ${matched.name}.` : category ? `Criei a categoria ${category.name}.` : "";
+  if (category && !data.categories.some((item) => item.id === category.id)) {
+    data.categories.push({ id: category.id, name: category.name, kind: type, color: COLORS[data.categories.length % COLORS.length] ?? "#1d4ed8" });
+  }
   const draft: TransactionDraft = {
     description: (state.description ?? "Lançamento").slice(0, 140),
     amount_cents: state.amountCents ?? 0,
@@ -506,7 +425,7 @@ async function saveInterview(token: string, state: InterviewState, data: Finance
       ? (status === "paid" ? "Esse valor sai do saldo e entra na parte vermelha do gráfico." : "A data é futura, então ele fica previsto.")
       : "O dinheiro ainda não saiu. Ele fica na parte amarela, como conta a pagar.";
   return {
-    reply: `${state.kind === "income" ? "Receita salva" : state.kind === "paid" ? "Gasto salvo" : "Conta futura salva"}: ${formatBRL(state.amountCents ?? 0)} de ${state.description}, em ${when}, na conta ${where}. ${effect}\nSe algum detalhe ficou errado, diga: muda o valor para 200. Quer anotar outro? Se acabou, diga: só isso.`,
+    reply: `${state.kind === "income" ? "Receita salva" : state.kind === "paid" ? "Gasto salvo" : "Conta futura salva"}: ${formatBRL(state.amountCents ?? 0)} de ${state.description}, em ${when}, na conta ${where}. ${categoryLine} ${effect}\nSe algum detalhe ficou errado, diga: muda o valor para 200. Quer anotar outro? Se acabou, diga: só isso.`,
     place: chartPlace(occurred.slice(0, 7)),
   };
 }
@@ -556,6 +475,59 @@ async function applyChange(token: string, text: string, data: FinanceData, today
   return { reply: `${direction} ${target.description} agora é ${formatBRL(amount)}. O gráfico usa esse novo número.`, place: chartPlace(target.occurredOn.slice(0, 7)) };
 }
 
+async function launchFromGround(token: string, userId: string, grounded: GroundLaunch, data: FinanceData): Promise<{ reply: string; place: AssistantPlace }> {
+  const draft = grounded.draft;
+  if (!draft) throw new HttpError(400, "Falta um detalhe para lançar.");
+  let categoryId = draft.categoryId;
+  if (!categoryId && draft.createCategory) {
+    const created = await ensureCategory(token, userId, draft.createCategory, draft.type, data.categories.length);
+    categoryId = created.id;
+    data.categories.push({ id: created.id, name: created.name, kind: draft.type, color: COLORS[data.categories.length % COLORS.length] ?? "#1d4ed8" });
+  }
+  const saved = await confirmDraft(token, {
+    kind: draft.cardId ? "card_purchase" : draft.installments > 1 ? "bank_installments" : "transaction",
+    draft: {
+      description: draft.description,
+      amount_cents: draft.amountCents,
+      type: draft.type,
+      occurred_on: draft.occurredOn,
+      due_on: draft.dueOn,
+      status: draft.status,
+      category_id: categoryId,
+      account_id: draft.accountId,
+      card_id: draft.cardId,
+      payment_method: draft.paymentMethod,
+      notes: null,
+      installments: draft.installments,
+    },
+  }, data);
+  return { reply: grounded.reply, place: saved.place };
+}
+
+function plainMessage(message: string | null | undefined): string {
+  const text = message?.trim() ?? "";
+  if (!text || /R\$\s*\d/.test(text)) return "Entendi. Vou olhar no sistema se isso existe e, se achar, eu lanço.";
+  return text;
+}
+
+function lookupNotes(draft: UnderstoodDraft | null, data: FinanceData): string {
+  if (!draft) return "";
+  const lines: string[] = [];
+  if (draft.account_name?.trim()) {
+    const found = matchByName(data.accounts.filter((account) => !account.archived), draft.account_name);
+    lines.push(found ? `Achei a conta ${found.name}.` : `Não achei a conta ${draft.account_name.trim()}.`);
+  }
+  if (draft.category_name?.trim()) {
+    const found = matchByName(data.categories, draft.category_name);
+    lines.push(found ? `Achei a categoria ${found.name}.` : `Não achei a categoria ${draft.category_name.trim()}.`);
+  }
+  if (draft.card_name?.trim()) {
+    const found = matchByName(data.cards.filter((card) => !card.archived), draft.card_name);
+    lines.push(found ? `Achei o cartão ${found.name}.` : `Não achei o cartão ${draft.card_name.trim()}.`);
+  }
+  return lines.length ? `\n\n${lines.join("\n")}` : "";
+}
+
 function isQuestion(text: string): boolean {
   if (text.includes("?")) return true;
   const normalized = normalizeText(text);
@@ -591,10 +563,13 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     }
     const spoken = inferEntry(text);
     const aboutCard = /cart[aã]o|fatura/.test(normalizeText(text));
-    const activeKind = aboutCard ? null : guide === "income" || guide === "paid" || guide === "upcoming" ? guide : interview?.kind ?? null;
+    const cardPurchase = aboutCard && (spoken === "paid" || readAmountCents(text) != null);
+    const continuing = interview != null && continuesInterview(text, interview, data, today);
+    const guided = aboutCard ? null : guide === "income" || guide === "paid" || guide === "upcoming" ? guide : null;
+    const activeKind = cardPurchase ? null : guided ?? (continuing ? interview?.kind ?? null : null);
     const switched = spoken != null && activeKind != null && spoken !== activeKind;
-    const entryKind = switched ? spoken : activeKind ?? spoken;
-    const interviewNow = switched ? null : interview;
+    const entryKind = cardPurchase ? null : switched ? spoken : activeKind ?? (continuing ? null : spoken);
+    const interviewNow = continuing && !switched ? interview : null;
     if (entryKind && !(isQuestion(text) && readAmountCents(text) == null && explicitDate(text, today) == null && !matchByName(data.accounts, text))) {
       if (!switched) {
         const changed = await applyChange(user.token, text, data, today);
@@ -615,7 +590,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
         sendJson(res, 200, { reply: result.question ?? "Me diga o próximo detalhe.", interview: result.state, confirmation: null });
         return;
       }
-      const saved = await saveInterview(user.token, result.state, data, today);
+      const saved = await saveInterview(user.token, user.id, result.state, data, today);
       sendJson(res, 200, { reply: saved.reply, place: saved.place, interview: null, saved: true, confirmation: null });
       return;
     }
@@ -660,66 +635,83 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       sendJson(res, 200, { reply: `${answerQuery(query, data, today, text)}${reminder ? `\n\nPara continuar o lançamento: ${reminder}` : ""}`, chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), interview, confirmation: null });
       return;
     }
-    if (!/\b(transferi|transferir)\b/.test(normalizeText(text))) {
+    const normalized = normalizeText(text);
+    if (readAmountCents(text) == null && !inferEntry(text) && !/\b(transferi|transferir|anota|anotar|lanca|lan[cç]ar)\b/.test(normalized) && /^(oi|ola|obrigad|bom dia|boa tarde|boa noite)\b|explica|para que serve|o que (e|voce) faz|como (eu )?uso|como funciona/.test(normalized)) {
       sendJson(res, 200, {
-        reply: "Eu respondo só sobre este app. Posso dizer quanto você tem, quanto deve, o que ainda vai receber e pagar, e quanto sobra no fim do mês. Também lanço receita, despesa, conta a pagar e conta bancária. Use um botão ou escreva de um desses jeitos.",
-        place: { label: "Ver na visão geral", to: "/" },
+        reply: "Eu cuido do seu dinheiro neste app. Digo quanto você tem, quanto deve, o que ainda vai receber e pagar, e quanto sobra no fim do mês. Quando você fala um valor, eu procuro a conta e a categoria. Se achar, eu lanço.",
         interview: null,
         confirmation: null,
       });
       return;
     }
     await consumeAiQuota(user.id);
-    const guideNote = isQuestion(text) ? "" : guide === "income"
-      ? "A pessoa está informando uma receita que já entrou. Use action create_transaction, type income e status received."
-      : guide === "paid"
-        ? "A pessoa está informando uma despesa que já pagou. Use action create_transaction, type expense e status paid."
-        : guide === "upcoming"
-          ? "A pessoa está informando uma conta que ainda vai pagar. Use action create_transaction, type expense e status pending. Se citar um dia, use esse dia."
-          : "";
     const context = {
       hoje: today,
       contas: data.accounts.filter((account) => !account.archived).map((account) => account.name),
       cartoes: data.cards.filter((card) => !card.archived).map((card) => card.name),
       categorias: data.categories.map((category) => `${category.name} (${category.kind === "income" ? "receita" : "despesa"})`),
     };
-    const intent = await interpretIntent(`Contexto:\n${JSON.stringify(context)}\n${guideNote}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
-    if (!guide && intent.action === "query" && intent.query?.metric) {
-      const amount = intent.query.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query.amount_cents;
-      const query = { ...intent.query, amount_cents: amount };
-      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: { ...placeForQuery(query, data, today, text), label: "Ver no gráfico" }, confirmation: null });
-      return;
-    }
-    if (!guide && intent.action === "create_transfer") {
-      sendJson(res, 200, buildTransfer(text, intent.transfer, data, today));
-      return;
-    }
-    if (!guide && intent.action === "chat") {
-      const message = intent.message ?? "";
-      const place = placeFromText(text);
+    let intent: Awaited<ReturnType<typeof interpretIntent>>;
+    try {
+      intent = await interpretIntent(`Contexto do sistema desta pessoa:\n${JSON.stringify(context)}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
+    } catch (error) {
+      if (error instanceof HttpError && (error.status === 429 || error.status === 503)) throw error;
       sendJson(res, 200, {
-        reply: /R\$\s*\d/.test(message)
-          ? "Posso responder com os números reais dos seus lançamentos. Pergunte, por exemplo, qual é o saldo ou quanto vai sobrar no fim do mês."
-          : `${message.trim() || "Posso lançar conta, receita, despesa, compra no cartão e transferência. Nada é salvo sem a sua confirmação."}${place ? `\n\nO que não dá para gravar por aqui está na tela indicada abaixo, com os seus dados.` : ""}`,
-        place,
+        reply: "Entendi a conversa. Se quiser gravar alguma coisa, diga o valor e o nome. Eu procuro a conta e a categoria e, se achar, eu lanço.",
+        interview: null,
         confirmation: null,
       });
       return;
     }
-    const guidedDate = resolveOccurredOn(text, today, intent.draft?.occurred_on).date;
-    const guidedFuture = guidedDate > today;
-    const guidedDraft = guide
-      ? {
-          ...(intent.draft ?? {}),
-          type: guide === "income" ? "income" as const : "expense" as const,
-          status: guide === "income"
-            ? (guidedFuture ? "planned" as const : "received" as const)
-            : guide === "paid"
-              ? (guidedFuture ? "planned" as const : "paid" as const)
-              : (guidedFuture ? "planned" as const : "pending" as const),
-        }
-      : intent.draft;
-    sendJson(res, 200, buildTransaction(text, guidedDraft, data, today));
+    const transfer = intent.action === "create_transfer" || /\b(transferi|transferir)\b/.test(normalizeText(text));
+    if (transfer) {
+      const move = groundTransfer(text, data, today, intent.transfer?.from_account_name, intent.transfer?.to_account_name);
+      if (!move.ready || move.amountCents == null || !move.date || !move.fromId || !move.toId) {
+        sendJson(res, 200, { reply: move.reply, interview: null, confirmation: null });
+        return;
+      }
+      const saved = await confirmDraft(user.token, {
+        kind: "transfer",
+        draft: {
+          description: intent.transfer?.description?.trim() || "Transferência",
+          amount_cents: move.amountCents,
+          occurred_on: move.date,
+          from_account_id: move.fromId,
+          to_account_id: move.toId,
+        },
+      }, data);
+      sendJson(res, 200, { reply: move.reply, place: saved.place, interview: null, saved: true, confirmation: null });
+      return;
+    }
+    const money = intent.action === "create_transaction" || intent.action === "clarify" || inferEntry(text) != null || readAmountCents(text) != null;
+    if (money && intent.action !== "query") {
+      const grounded = groundLaunch(text, data, today, plainMessage(intent.message), intent.draft ?? null);
+      if (!grounded.ready || !grounded.draft) {
+        sendJson(res, 200, { reply: grounded.reply, interview: grounded.interview, confirmation: null });
+        return;
+      }
+      const saved = await launchFromGround(user.token, user.id, grounded, data);
+      sendJson(res, 200, { reply: saved.reply, place: saved.place, interview: null, saved: true, confirmation: null });
+      return;
+    }
+    if (intent.action === "query" && intent.query?.metric) {
+      const amount = intent.query.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query.amount_cents;
+      const query = { ...intent.query, amount_cents: amount };
+      sendJson(res, 200, {
+        reply: `Olhei no sistema.\n\n${answerQuery(query, data, today, text)}`,
+        chart: chartForQuery(query, data, today, text),
+        place: placeForQuery(query, data, today, text),
+        interview: null,
+        confirmation: null,
+      });
+      return;
+    }
+    sendJson(res, 200, {
+      reply: `${plainMessage(intent.message)}${lookupNotes(intent.draft ?? null, data)}`,
+      place: placeFromText(text),
+      interview: null,
+      confirmation: null,
+    });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 400;
     const message = error instanceof Error ? error.message : "Não consegui concluir o pedido.";

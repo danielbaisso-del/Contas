@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conductInterview, readAmountCents } from "@/domain/interview";
+import { conductInterview, inferEntry, readAmountCents } from "@/domain/interview";
 import type { FinanceData } from "@/types/models";
 
 const data = {
@@ -36,6 +36,26 @@ describe("entrevista da IA", () => {
     expect(third.ready).toBe(true);
     expect(third.state.occurredOn).toBe("2026-11-09");
     expect(third.state.accountId).toBe("a");
+  });
+
+  it("entende uma conta a pagar e separa o nome da categoria", () => {
+    expect(inferEntry("devo R$ 450 de aluguel")).toBe("upcoming");
+    expect(inferEntry("quanto estou devendo")).toBeNull();
+    const result = conductInterview("upcoming", "devo R$ 450 de aluguel", null, {
+      ...data,
+      categories: [{ id: "moradia", name: "Moradia", kind: "expense", color: "#1d4ed8" }],
+    }, "2026-11-09");
+    expect(result.state.amountCents).toBe(45000);
+    expect(result.state.description).toBe("Aluguel");
+    expect(result.question).toMatch(/Moradia/);
+    expect(result.question).toMatch(/vence/i);
+    expect(result.ready).toBe(false);
+  });
+
+  it("avisa que vai criar a categoria quando ela não existe", () => {
+    const result = conductInterview("upcoming", "devo 80 de petshop", null, data, "2026-11-09");
+    expect(result.state.description).toBe("Petshop");
+    expect(result.question).toMatch(/criar a categoria Petshop/i);
   });
 
   it("aceita valor, origem, data e conta na mesma frase", () => {

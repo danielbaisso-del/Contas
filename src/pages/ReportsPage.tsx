@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BalanceChart, CategoryChart, FlowChart, SeriesChart } from "@/components/Charts";
+import { BalanceChart, FlowChart, SeriesChart } from "@/components/Charts";
 import { PageHeader } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import { buildReport } from "@/finance/engine";
-import { currentMonth, formatMonthLabel, shiftMonth } from "@/lib/dates";
+import { currentMonth, shiftMonth } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 
 export function ReportsPage() {
   const { data, today } = useFinance();
   const [params] = useSearchParams();
-  const foco = (params.get("foco") ?? "").toLocaleLowerCase("pt-BR");
   const [from, setFrom] = useState(params.get("de") && /^\d{4}-\d{2}$/.test(params.get("de") ?? "") ? params.get("de")! : shiftMonth(currentMonth(today), -5));
   const [to, setTo] = useState(params.get("ate") && /^\d{4}-\d{2}$/.test(params.get("ate") ?? "") ? params.get("ate")! : currentMonth(today));
   useEffect(() => {
@@ -20,22 +19,14 @@ export function ReportsPage() {
     if (end && /^\d{4}-\d{2}$/.test(end)) setTo(end);
   }, [params]);
   const report = useMemo(() => buildReport(data, from, to, today), [data, from, to, today]);
-  const period = `${formatMonthLabel(from)} até ${formatMonthLabel(to)}`;
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Relatórios" description="Cinco gráficos do seu dinheiro. O período já abre nos últimos 6 meses." />
-      <div className="flex flex-wrap gap-3">
-        <label className="text-sm">De <input className="ml-2 rounded-xl border border-line bg-surface px-3 py-2" type="month" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
-        <label className="text-sm">Até <input className="ml-2 rounded-xl border border-line bg-surface px-3 py-2" type="month" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+      <PageHeader title="Relatórios" description="Quatro gráficos do seu dinheiro. O período já abre nos últimos 6 meses." />
+      <div className="grid gap-3 sm:flex">
+        <label className="grid gap-1 text-sm">De <input className="w-full rounded-xl border border-line bg-surface px-3 py-2 sm:w-auto" type="month" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+        <label className="grid gap-1 text-sm">Até <input className="w-full rounded-xl border border-line bg-surface px-3 py-2 sm:w-auto" type="month" value={to} onChange={(event) => setTo(event.target.value)} /></label>
       </div>
-
-      <article className="rounded-3xl border border-line bg-surface p-5">
-        <h2 className="font-semibold">Despesas por categoria</h2>
-        <p className="mb-4 mt-1 text-sm text-muted">{period}. Cada categoria lançada neste período vira uma fatia, com o valor.</p>
-        <CategoryChart data={report.categories} />
-        <NumberList rows={report.categories.map((item) => ({ name: item.name, value: formatBRL(item.totalCents), marked: foco !== "" && item.name.toLocaleLowerCase("pt-BR") === foco }))} empty="Nenhuma despesa paga neste período." />
-      </article>
 
       <article className="rounded-3xl border border-line bg-surface p-5">
         <h2 className="font-semibold">Receitas por mês</h2>

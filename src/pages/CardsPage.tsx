@@ -27,12 +27,12 @@ export function CardsPage() {
             const openInvoice = data.invoices.filter((invoice) => invoice.creditCardId === card.id && invoice.status !== "paid").reduce((sum, invoice) => sum + invoiceTotal(invoice.id, data.transactions), 0);
             return (
               <article key={card.id} className="rounded-3xl border border-line bg-surface p-5">
-                <div className="flex justify-between"><div><p className="font-semibold">{card.name}</p><p className="text-xs text-muted">{card.bank || "Sem banco"} · fecha dia {card.closingDay} · vence dia {card.dueDay}</p></div><span className="h-3 w-3 rounded-full" style={{ background: card.color }} /></div>
+                <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{card.name}</p><p className="text-xs text-muted">{card.bank || "Sem banco"} · fecha dia {card.closingDay} · vence dia {card.dueDay}</p></div><span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ background: card.color }} /></div>
                 <div className="mt-4 h-2 overflow-hidden rounded-full bg-surface-2"><div className="h-full bg-accent" style={{ width: `${card.limitCents ? Math.min(100, (used / card.limitCents) * 100) : 0}%` }} /></div>
                 <p className="mt-3 text-sm">Limite total: <MoneyText cents={card.limitCents} /></p>
                 <p className="text-sm">Limite disponível: <MoneyText cents={available} tone={available < 0 ? "expense" : "income"} /></p>
                 <p className="text-xs text-muted">Usado, com parcelas futuras: {formatBRL(used)}. Faturas em aberto: {formatBRL(openInvoice)}.</p>
-                <div className="mt-4 flex gap-2"><Link className="rounded-xl bg-accent px-4 py-2 text-sm text-white" to={`/cartoes/${card.id}`}>Abrir</Link><Button variant="secondary" onClick={() => { setEditing(card); setOpen(true); }}>Editar</Button></div>
+                <div className="mt-4 flex flex-wrap gap-2"><Link className="rounded-xl bg-accent px-4 py-2 text-sm text-white" to={`/cartoes/${card.id}`}>Abrir</Link><Button variant="secondary" onClick={() => { setEditing(card); setOpen(true); }}>Editar</Button></div>
               </article>
             );
           })}
@@ -136,7 +136,7 @@ function PurchaseModal({ card, onClose }: { card: CreditCard; onClose: () => voi
         <Field label="Data da compra"><Input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></Field>
         <Field label="Categoria"><Select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}><option value="">Sem categoria</option>{data.categories.filter((item) => item.kind === "expense").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>
         <Field label="Observações"><TextArea value={notes} onChange={(event) => setNotes(event.target.value)} /></Field>
-        {preview.length ? <div className="rounded-2xl bg-surface-2 p-3 text-sm">{preview.map((item) => <p key={item.number} className="flex justify-between"><span>Parcela {item.number} · vence {formatDateBR(item.dueOn)}</span><span>{formatBRL(item.amountCents)}</span></p>)}</div> : null}
+        {preview.length ? <div className="rounded-2xl bg-surface-2 p-3 text-sm">{preview.map((item) => <p key={item.number} className="flex flex-col gap-0.5 py-1 sm:flex-row sm:justify-between"><span>Parcela {item.number} · vence {formatDateBR(item.dueOn)}</span><span>{formatBRL(item.amountCents)}</span></p>)}</div> : null}
         <Button onClick={async () => { try { if (!amount) throw new Error("Informe o valor."); await createCardPurchase({ description, totalCents: amount, count, purchasedOn: date, categoryId, cardId: card.id, closingDay: card.closingDay, dueDay: card.dueDay, notes }); await refresh(); onClose(); } catch (error) { toast(errorMessage(error), "error"); } }}>Lançar compra</Button>
       </div>
     </Modal>

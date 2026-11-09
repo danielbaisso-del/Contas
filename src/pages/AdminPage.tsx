@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { EmptyState, MoneyText, PageHeader } from "@/components/ui";
 import { formatDateBR } from "@/lib/dates";
+import { formatBRL } from "@/lib/money";
 import { accountTypeLabel, statusLabel, typeLabel } from "@/lib/labels";
 import { loadSignups, type Signup } from "@/services/admin";
 
@@ -34,7 +35,17 @@ export function AdminPage() {
       {!loading && !error && !users.length ? <EmptyState title="Nenhuma conta ainda" text="Quando alguém se cadastrar, os dados aparecem aqui." /> : null}
       {!loading && !error && users.length ? (
         <>
-          <div className="overflow-hidden rounded-3xl border border-line bg-surface">
+          <div className="space-y-3 md:hidden">
+            {users.map((user) => (
+              <button key={user.id} className={`w-full rounded-3xl border border-line bg-surface p-4 text-left ${selected?.id === user.id ? "ring-2 ring-accent" : ""}`} type="button" onClick={() => setSelectedId(user.id)}>
+                <p className="font-medium">{user.name || "Sem nome"}</p>
+                <p className="text-xs text-muted">{user.email}</p>
+                <p className="mt-2 text-sm">Saldo <MoneyText cents={user.balanceCents} tone="auto" /></p>
+                <p className="text-xs text-muted">Recebeu {formatBRL(user.incomeCents)} · gastou {formatBRL(user.spendingCents)}</p>
+              </button>
+            ))}
+          </div>
+          <div className="hidden overflow-hidden rounded-3xl border border-line bg-surface md:block">
             <div className="border-b border-line px-5 py-4 text-sm text-muted">{users.length} {users.length === 1 ? "pessoa" : "pessoas"}. Clique em uma linha para ver as contas e os últimos lançamentos.</div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[860px] text-left text-sm">

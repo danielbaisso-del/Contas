@@ -1,4 +1,4 @@
-import { resolveAmountCents, resolveOccurredOn } from "@/domain/resolveText";
+import { resolveAmountCents, resolveOccurredOn, suggestCategory } from "@/domain/resolveText";
 import { formatBRL, parseMoneyToCents } from "@/lib/money";
 import { matchByName, normalizeText } from "@/lib/utils";
 import type { InterviewState } from "@/domain/assistant";
@@ -41,10 +41,48 @@ function sourceText(text: string, accounts: Account[]): string {
     .replace(/\b\d{1,2}[/\-.]\d{1,2}(?:[/\-.]\d{2,4})?\b/g, " ")
     .replace(/\b(hoje|ontem|amanh[aã]|dia)\s*\d{0,2}\b/gi, " ")
     .replace(/\b\d{1,7}(?:[.,]\d{1,2})?\b/g, " ")
-    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|quero|lancar|lan[cç]ar|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s)\b/gi, " ")
+    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|devo|devendo|tenho|falta|quero|lancar|lan[cç]ar|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
+}
+
+export function continuesInterview(text: string, current: InterviewState, data: FinanceData, today: string): boolean {
+  const normalized = normalizeText(text);
+  if (text.includes("?") || /^(quanto|qual|quais|como|posso|mostra|mostre|explica|onde|me)\b/.test(normalized)) return false;
+  const spoken = inferEntry(text);
+  if (spoken && spoken !== current.kind) return false;
+  const accounts = data.accounts.filter((account) => !account.archived);
+  const hasAmount = readAmountCents(text) != null;
+  const hasDate = explicitDate(text, today) != null;
+  const hasAccount = matchByName(accounts, text) != null;
+  if (current.amountCents != null && current.description && hasAmount && !(spoken === current.kind && hasDate)) return false;
+  if (current.amountCents == null && hasAmount) return true;
+  if (!current.occurredOn && hasDate && !hasAmount) return true;
+  if (!current.accountId && hasAccount && !hasAmount) return true;
+  if (!current.description && !hasAmount && text.trim().length >= 2 && text.trim().length <= 60) return true;
+  return spoken === current.kind && (hasAmount || hasDate || hasAccount);
+}
+
+export function inferEntry(text: string): "income" | "paid" | "upcoming" | null {
+  const normalized = normalizeText(text);
+  if (/\b(recebi|receber|entrou|ganhei|receita)\b/.test(normalized)) return "income";
+  if (/\b(vou pagar|ainda vou|vai vencer|vence dia|vence em|conta a pagar)\b/.test(normalized)) return "upcoming";
+  if (/\b(devo|devendo|tenho que pagar)\b/.test(normalized)) {
+    if (/^(quanto|qual|quais|como|me)\b/.test(normalized) && readAmountCents(text) == null) return null;
+    if (readAmountCents(text) != null) return "upcoming";
+    const rest = normalized.replace(/\b(eu|estou|to|devo|devendo|tenho|que|pagar|o|a|os|as|de|do|da|um|uma)\b/g, " ").replace(/\s+/g, " ").trim();
+    if (rest.length >= 3) return "upcoming";
+    return null;
+  }
+  if (/\b(paguei|gastei|comprei|despesa)\b/.test(normalized)) return "paid";
+  return null;
+}
+
+function categoryNote(description: string, data: FinanceData, kind: InterviewState["kind"]): string {
+  const type = kind === "income" ? "income" : "expense";
+  const category = suggestCategory(description, data.categories, type, description);
+  return category ? ` A categoria fica ${category.name}.` : ` Vou criar a categoria ${description}.`;
 }
 
 function openAccounts(data: FinanceData): Account[] {
@@ -112,8 +150,8 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
       state,
       ready: false,
       question: kind === "upcoming"
-        ? `${state.description} de ${formatBRL(state.amountCents)}. Em que dia vence? Diga o dia, como 10 ou 10/11.`
-        : `${state.description} de ${formatBRL(state.amountCents)}. Em que dia foi? Diga hoje, ontem ou uma data, como 05/11.`,
+        ? `Entendi: ${state.description} de ${formatBRL(state.amountCents)}.${categoryNote(state.description, data, kind)} Em que dia vence? Diga o dia, como 10 ou 10/11.`
+        : `Entendi: ${state.description} de ${formatBRL(state.amountCents)}.${categoryNote(state.description, data, kind)} Em que dia foi? Diga hoje, ontem ou uma data, como 05/11.`,
     };
   }
   if (!state.accountId) {

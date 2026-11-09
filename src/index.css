@@ -58,6 +58,10 @@ body,
   min-height: 100%;
 }
 
+html {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
@@ -97,6 +101,25 @@ body {
 
 .attention {
   animation: attention 1.8s ease-out infinite;
+}
+
+@keyframes tap-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 111, 216, 0.38);
+  }
+  55% {
+    box-shadow: 0 0 0 7px rgba(59, 111, 216, 0);
+  }
+}
+
+.tap {
+  animation: tap-glow 2.2s ease-in-out infinite;
+  transition: transform 0.2s ease;
+}
+
+.tap:hover {
+  transform: translateY(-2px);
 }
 
 @keyframes chart-spin {
@@ -156,6 +179,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .rise,
   .attention,
+  .tap,
   .chart-spin,
   .chart-bar,
   .chart-draw,
@@ -169,4 +193,12 @@ select,
 textarea,
 button {
   font: inherit;
+}
+
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }

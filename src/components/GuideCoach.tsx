@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 import { Mic, Sparkles, Square, X } from "lucide-react";
 import { ConfirmationCard } from "@/pages/AssistantPage";
 import { AnswerChart } from "@/components/Charts";
@@ -28,7 +29,17 @@ export function useGuide() {
   return value;
 }
 
-const WELCOME = "Eu respondo com os números deste app. Posso dizer quanto você tem, quanto deve, o que ainda falta e quanto sobra no fim do mês. Também lanço receita, despesa e conta a pagar. Toque um botão ou escreva.";
+const WELCOME = "Pode escrever do seu jeito. Eu entendo a frase, olho se a conta, a categoria ou o lançamento existe aqui e, se achar, lanço para você. Também digo quanto você tem, quanto deve, o que falta e quanto sobra.";
+const GROUP_WELCOME = "Aqui eu olho as contas de quem aceitou o grupo. Pergunte quanto vocês têm, quanto devem, o que falta e quanto sobra. Cada pessoa continua lançando na própria conta.";
+
+const GROUP_ACTIONS: Array<{ label: string; text: string; kind: "ask" }> = [
+  { label: "Quanto temos?", text: "Quanto dinheiro temos?", kind: "ask" },
+  { label: "Quanto devemos?", text: "Quanto estamos devendo?", kind: "ask" },
+  { label: "O que falta?", text: "Quanto ainda vamos receber e pagar?", kind: "ask" },
+  { label: "Quanto sobra?", text: "Quanto vai sobrar no fim do mês?", kind: "ask" },
+  { label: "Quem gastou?", text: "Quem gastou mais neste mês?", kind: "ask" },
+  { label: "Gráficos", text: "Mostra os gráficos do grupo", kind: "ask" },
+];
 
 const ACTIONS: Array<{ label: string; text: string; kind: "ask" | "entry" | "account" }> = [
   { label: "Quanto tenho?", text: "Quanto dinheiro tenho?", kind: "ask" },
@@ -70,13 +81,18 @@ export function GuideProvider({ children }: { children: ReactNode }) {
       const raw = localStorage.getItem("contas-bubble");
       if (!raw) return null;
       const parsed = JSON.parse(raw) as { x?: number; y?: number };
-      if (typeof parsed.x === "number" && typeof parsed.y === "number") return { x: parsed.x, y: parsed.y };
+      if (typeof parsed.x === "number" && typeof parsed.y === "number") {
+        const maxY = window.innerWidth < 1024 ? window.innerHeight - 150 : window.innerHeight - 72;
+        return { x: Math.min(parsed.x, window.innerWidth - 72), y: Math.min(parsed.y, maxY) };
+      }
     } catch { /* a bolha começa no canto */ }
     return null;
   });
   const bubblePoint = useRef(bubble);
   bubblePoint.current = bubble;
   const drag = useRef<{ offsetX: number; offsetY: number; startX: number; startY: number; moved: boolean } | null>(null);
+  const location = useLocation();
+  const group = location.pathname.startsWith("/conjunto");
   const recognition = useRef<SpeechRecognition | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -95,7 +111,8 @@ export function GuideProvider({ children }: { children: ReactNode }) {
   }, [data.accounts, financeLoading]);
 
   function openGuide() {
-    setItems((current) => current.length ? current : [{ id: crypto.randomUUID(), role: "assistant", content: WELCOME, confirmation: null, chart: null, place: null }]);
+    const welcome = group ? GROUP_WELCOME : WELCOME;
+    setItems((current) => current.length ? current : [{ id: crypto.randomUUID(), role: "assistant", content: welcome, confirmation: null, chart: null, place: null }]);
     setOpen(true);
   }
 
@@ -125,7 +142,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null, chart: null, place: null }]);
     setLoading(true);
     try {
-      const response = await askAssistant({ mode: "interpret", text: content, history, guide, interview: currentInterview });
+      const response = await askAssistant({ mode: "interpret", text: content, history, guide: group ? undefined : guide, interview: group ? null : currentInterview, household: group });
       if (response.chart) setFocusChart(response.chart);
       setInterview(response.interview ?? null);
       if (response.saved) await refresh();
@@ -214,7 +231,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
       {children}
       {open ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-0 sm:items-center sm:p-4">
-          <div className="flex max-h-[92vh] w-full max-w-lg flex-col rounded-t-3xl border border-line bg-surface shadow-2xl sm:rounded-3xl">
+          <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col border border-line bg-surface shadow-2xl sm:h-auto sm:max-h-[92vh] sm:max-w-lg sm:rounded-3xl" style={{ paddingTop: "env(safe-area-inset-top)" }}>
             <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-accent">Assistente</p>
@@ -233,14 +250,14 @@ export function GuideProvider({ children }: { children: ReactNode }) {
               ))}
               {notice ? <p className="rounded-2xl bg-income-soft px-4 py-3 text-sm leading-6 text-income">{notice}</p> : null}
             </div>
-            <div className="space-y-3 border-t border-line px-5 py-4">
+            <div className="space-y-3 border-t border-line px-4 py-3 sm:px-5 sm:py-4" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
               <div className="flex flex-wrap gap-2">
-                {(followUps.length ? followUps.map((label) => ({ label, text: label, kind: "entry" as const })) : ACTIONS).map((action) => (
+                {(followUps.length && !group ? followUps.map((label) => ({ label, text: label, kind: "entry" as const })) : group ? GROUP_ACTIONS : ACTIONS).map((action) => (
                   <button key={action.label} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-xs font-medium" disabled={loading} type="button" onClick={() => followUps.length ? void send(action.text) : choose(action)}>{action.label}</button>
                 ))}
                 {interview || accountMode ? <button className="rounded-full border border-line px-3 py-1.5 text-xs text-muted" type="button" onClick={() => stopEntry("só isso")}>Cancelar</button> : null}
               </div>
-              <textarea className="w-full rounded-2xl border border-line bg-canvas px-3 py-3 text-sm text-ink outline-none focus:border-accent" rows={2} value={text} placeholder="Pergunte ou responda. Exemplo: quanto tenho?" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+              <textarea className="w-full rounded-2xl border border-line bg-canvas px-3 py-3 text-sm text-ink outline-none focus:border-accent" rows={2} value={text} placeholder="Escreva do seu jeito. Exemplo: devo 450 de aluguel" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
               <div className="flex gap-2">
                 <button className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold ${listening ? "bg-expense text-white" : "bg-accent text-white"}`} onClick={listen} type="button">
                   {listening ? <Square size={16} /> : <Mic size={16} />}
@@ -253,8 +270,8 @@ export function GuideProvider({ children }: { children: ReactNode }) {
         </div>
       ) : (
         <button
-          className="attention fixed z-40 grid h-16 w-16 touch-none place-items-center rounded-full bg-accent text-white shadow-2xl"
-          style={bubble ? { left: bubble.x, top: bubble.y } : { right: 20, bottom: 20 }}
+          className={`attention fixed z-40 grid h-14 w-14 touch-none place-items-center rounded-full bg-accent text-white shadow-2xl sm:h-16 sm:w-16 ${bubble ? "" : "bottom-[calc(5.75rem+env(safe-area-inset-bottom))] right-4 lg:bottom-5"}`}
+          style={bubble ? { left: bubble.x, top: bubble.y } : undefined}
           type="button"
           aria-label="Falar com a IA"
           onPointerDown={(event) => {
@@ -266,8 +283,9 @@ export function GuideProvider({ children }: { children: ReactNode }) {
             const current = drag.current;
             if (!current) return;
             if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) > 6) current.moved = true;
-            const x = Math.min(window.innerWidth - 72, Math.max(8, event.clientX - current.offsetX));
-            const y = Math.min(window.innerHeight - 72, Math.max(8, event.clientY - current.offsetY));
+            const bottomLimit = window.innerWidth < 1024 ? 150 : 72;
+            const x = Math.min(window.innerWidth - 64, Math.max(8, event.clientX - current.offsetX));
+            const y = Math.min(window.innerHeight - bottomLimit, Math.max(8, event.clientY - current.offsetY));
             setBubble({ x, y });
           }}
           onPointerUp={() => {

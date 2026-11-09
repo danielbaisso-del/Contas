@@ -22,8 +22,9 @@ function AuthShell({ title, text, children }: { title: string; text: string; chi
         </ul>
         <p className="text-xs text-sidebar-muted">Nada é inventado. Cada valor nasce de um lançamento seu.</p>
       </section>
-      <section className="flex items-center justify-center px-5 py-10">
+      <section className="flex items-center justify-center px-5 py-8" style={{ paddingTop: "max(2rem, env(safe-area-inset-top))", paddingBottom: "max(2rem, env(safe-area-inset-bottom))" }}>
         <div className="w-full max-w-md">
+          <p className="mb-6 text-lg font-semibold lg:hidden">Contas</p>
           <div className="mb-6 flex items-center justify-between">
             <h1 className="text-2xl font-semibold">{title}</h1>
             <button className="rounded-xl border border-line p-2" onClick={toggle} aria-label="Alternar tema">{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}</button>

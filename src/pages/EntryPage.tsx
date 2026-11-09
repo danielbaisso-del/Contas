@@ -7,7 +7,7 @@ import { useToast } from "@/context/ToastContext";
 import { formatDateBR, todayISO } from "@/lib/dates";
 import { errorMessage } from "@/lib/utils";
 import { COLORS } from "@/lib/labels";
-import { deleteTransaction, saveCategory, saveTransaction } from "@/services/data";
+import { deleteTransaction, saveCategory, saveRecurrence, saveTransaction } from "@/services/data";
 import type { Transaction, TransactionStatus } from "@/types/models";
 
 type Mode = "income" | "expense";
@@ -88,7 +88,7 @@ function EntryPage({ mode }: { mode: Mode }) {
         description={income
           ? "Salário, serviço, cliente, venda ou outra entrada. Cada uma leva descrição, valor, categoria, data e se já foi recebida."
           : "Alimentação, moradia, luz, internet, combustível, assinatura ou lazer. Cada uma leva descrição, valor, categoria, vencimento e se já foi paga. Compra no cartão fica na tela Cartões."}
-        action={<div className="flex gap-2"><Button variant="secondary" onClick={() => setCategoryOpen(true)}>Nova categoria</Button><Button onClick={() => { setEditing(null); setOpen(true); }}>{income ? "Nova receita" : "Nova despesa"}</Button></div>}
+        action={<><Button variant="secondary" className="flex-1 sm:flex-none" onClick={() => setCategoryOpen(true)}>Nova categoria</Button><Button className="flex-1 sm:flex-none" onClick={() => { setEditing(null); setOpen(true); }}>{income ? "Nova receita" : "Nova despesa"}</Button></>}
       />
       <div className="mb-4 flex gap-2">
         <button className={`rounded-full px-3 py-1.5 text-sm ${onlyOpen ? "bg-surface text-muted" : "bg-accent text-white"}`} onClick={() => setOnlyOpen(false)}>Todas</button>
@@ -97,7 +97,30 @@ function EntryPage({ mode }: { mode: Mode }) {
       {!rows.length ? (
         <EmptyState title={income ? "Nenhuma receita ainda" : "Nenhuma despesa ainda"} text={income ? "Exemplo: Salário, R$ 3.200, categoria Salário, dia 5, recebido." : "Exemplo: Internet, R$ 120, categoria Contas da casa, vence dia 10, pendente."} action={<Button onClick={() => setOpen(true)}>{income ? "Lançar a primeira receita" : "Lançar a primeira despesa"}</Button>} />
       ) : (
-        <div className="overflow-x-auto rounded-3xl border border-line bg-surface">
+        <>
+        <div className="space-y-3 md:hidden">
+          {rows.map((item) => {
+            const openItem = income ? item.status !== "received" : item.status !== "paid";
+            const category = data.categories.find((entry) => entry.id === item.categoryId)?.name ?? "Sem categoria";
+            return (
+              <article key={item.id} className="rounded-3xl border border-line bg-surface p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium">{item.description}</p>
+                    <p className="mt-1 text-xs text-muted">Data: {formatDateBR(item.dueOn || item.occurredOn)} · {category} · {openItem ? "Pendente" : income ? "Recebido" : "Pago"}</p>
+                  </div>
+                  <MoneyText cents={item.amountCents} tone={income ? "income" : "expense"} />
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {openItem ? <Button variant="secondary" onClick={() => void settle(item)}>{income ? "Recebi" : "Paguei"}</Button> : null}
+                  <Button variant="ghost" onClick={() => { setEditing(item); setOpen(true); }}>Editar</Button>
+                  <Button variant="ghost" onClick={() => void remove(item)}>Apagar</Button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        <div className="hidden overflow-x-auto rounded-3xl border border-line bg-surface md:block">
           <table className="w-full min-w-[680px] text-left text-sm">
             <thead className="text-xs text-muted">
               <tr>
@@ -131,6 +154,7 @@ function EntryPage({ mode }: { mode: Mode }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
       {open ? <EntryModal mode={mode} transaction={editing} today={today} onClose={close} /> : null}
       {categoryOpen ? <CategoryModal mode={mode} onClose={() => setCategoryOpen(false)} /> : null}
@@ -160,6 +184,7 @@ function EntryModal({ mode, transaction, today, onClose }: { mode: Mode; transac
   const [date, setDate] = useState(transaction?.dueOn || transaction?.occurredOn || todayISO());
   const [done, setDone] = useState(transaction ? (income ? transaction.status === "received" : transaction.status === "paid") : true);
   const [accountId, setAccountId] = useState(transaction?.accountId ?? accounts[0]?.id ?? "");
+  const [fixed, setFixed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   async function addCategory() {
@@ -182,17 +207,31 @@ function EntryModal({ mode, transaction, today, onClose }: { mode: Mode; transac
     const status: TransactionStatus = income ? (done ? "received" : "pending") : (done ? "paid" : "pending");
     setSaving(true);
     try {
-      await saveTransaction({
-        description,
-        amountCents: amount,
-        type: mode,
-        occurredOn: date,
-        dueOn: date,
-        status,
-        categoryId: categoryId || null,
-        accountId,
-      }, transaction?.id);
-      toast(income ? "Receita salva." : "Despesa salva.");
+      if (!income && fixed && !transaction) {
+        await saveRecurrence({
+          description,
+          amountCents: amount,
+          type: "expense",
+          categoryId: categoryId || null,
+          accountId,
+          frequency: "monthly",
+          interval: 1,
+          startOn: date,
+        });
+        toast("Conta fixa salva. Ela se repete neste dia e o celular avisa quando você abrir o app.");
+      } else {
+        await saveTransaction({
+          description,
+          amountCents: amount,
+          type: mode,
+          occurredOn: date,
+          dueOn: date,
+          status,
+          categoryId: categoryId || null,
+          accountId,
+        }, transaction?.id);
+        toast(income ? "Receita salva com esta data. Dá para mudar a data, o valor e o nome depois." : "Despesa salva.");
+      }
       await refresh();
       onClose();
     } catch (error) {
@@ -211,9 +250,15 @@ function EntryModal({ mode, transaction, today, onClose }: { mode: Mode; transac
         </div>
       ) : (
         <div className="space-y-4">
-          <Field label="Descrição" hint={income ? "Exemplos: Salário, Serviço, Cliente A, Venda." : "Exemplos: Mercado, Aluguel, Luz, Internet, Combustível."}>
+          <Field label="Descrição" hint={income ? "Salário e renda extra são lançamentos separados. Cada um guarda a própria data." : "Exemplos: Mercado, Aluguel, Luz, Internet, Combustível."}>
             <Input value={description} onChange={(event) => setDescription(event.target.value)} />
           </Field>
+          {income ? (
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="rounded-full bg-surface px-3 py-1.5 text-sm" onClick={() => setDescription("Salário")}>Salário</button>
+              <button type="button" className="rounded-full bg-surface px-3 py-1.5 text-sm" onClick={() => setDescription("Renda extra")}>Renda extra</button>
+            </div>
+          ) : null}
           <MoneyField label="Valor" value={amount} onChange={setAmount} />
           <Field label="Categoria">
             <Select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
@@ -225,9 +270,15 @@ function EntryModal({ mode, transaction, today, onClose }: { mode: Mode; transac
             <Input value={newCategory} placeholder={income ? "Nova categoria de receita" : "Nova categoria de despesa"} onChange={(event) => setNewCategory(event.target.value)} />
             <Button variant="secondary" onClick={() => void addCategory()}>Adicionar</Button>
           </div>
-          <Field label={income ? "Data de recebimento" : "Data de vencimento"}>
+          <Field label={income ? "Data deste recebimento" : "Data de vencimento"} hint={income ? "O dia do salário e o dia da renda extra podem mudar. Edite o lançamento para trocar a data." : "Esta data vale para este lançamento. Marque conta fixa se o mesmo valor volta todo mês."}>
             <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
           </Field>
+          {!income && !transaction ? (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={fixed} onChange={(event) => setFixed(event.target.checked)} />
+              Conta fixa, todo mês neste dia
+            </label>
+          ) : null}
           <Field label="Status">
             <Select value={done ? "done" : "open"} onChange={(event) => setDone(event.target.value === "done")}>
               <option value="done">{income ? "Recebido" : "Pago"}</option>

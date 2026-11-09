@@ -100,9 +100,9 @@ function PieBlock({ data, emptyNames, keepZeros = false }: { data: Array<{ name:
       </div>
       <ul className="space-y-2">
         {legend.map((item, index) => (
-          <li key={item.name} className="flex items-center justify-between gap-3 text-sm">
-            <span className="flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: item.color || palette[index % palette.length] }} />{item.name}</span>
-            <span className="font-semibold tabular-nums">{formatBRL(item.totalCents)} · {total ? Math.round((item.totalCents / total) * 100) : 0}%</span>
+          <li key={item.name} className="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <span className="flex min-w-0 items-center gap-2"><span className="h-3 w-3 shrink-0 rounded-full" style={{ background: item.color || palette[index % palette.length] }} />{item.name}</span>
+            <span className="font-semibold tabular-nums sm:text-right">{formatBRL(item.totalCents)} · {total ? Math.round((item.totalCents / total) * 100) : 0}%</span>
           </li>
         ))}
       </ul>
@@ -151,12 +151,12 @@ export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: 
   const peak = Math.max(1, ...data.flatMap((item) => [item.incomeCents, item.expenseCents]));
   return (
     <div>
-    <div className="h-72">
+    <div className="h-64 min-w-0 sm:h-72">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data}>
           <CartesianGrid stroke="var(--line)" vertical={false} />
-          <XAxis dataKey="label" stroke="var(--muted)" fontSize={12} tickLine={false} axisLine={false} />
-          <YAxis stroke="var(--muted)" fontSize={12} tickFormatter={axis} tickLine={false} axisLine={false} width={56} domain={[0, peak]} />
+          <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+          <YAxis stroke="var(--muted)" fontSize={10} tickFormatter={axis} tickLine={false} axisLine={false} width={40} domain={[0, peak]} />
           <Tooltip formatter={(value: number, name: string) => [formatBRL(Number(value)), name === "incomeCents" ? "Receitas" : "Despesas"]} contentStyle={tooltipStyle} />
           <Legend formatter={(value) => (value === "incomeCents" ? "Receitas recebidas" : "Despesas do mês")} />
           <Bar dataKey="incomeCents" fill="var(--income)" radius={[6, 6, 0, 0]} />
@@ -167,7 +167,7 @@ export function FlowChart({ data }: { data: Array<{ label: string; incomeCents: 
       <p className="mt-3 text-sm">No mês mais recente, {latest?.label}: <strong className="text-income">{formatBRL(latest?.incomeCents ?? 0)}</strong> entraram e <strong className="text-expense">{formatBRL(latest?.expenseCents ?? 0)}</strong> saíram.</p>
       <div className="mt-2 divide-y divide-line text-sm">
         {data.map((item) => (
-          <p key={item.label} className="flex justify-between gap-3 py-1.5"><span>{item.label}</span><span>{formatBRL(item.incomeCents)} entrou · {formatBRL(item.expenseCents)} saiu</span></p>
+          <p key={item.label} className="flex flex-col gap-0.5 py-1.5 sm:flex-row sm:justify-between sm:gap-3"><span>{item.label}</span><span>{formatBRL(item.incomeCents)} entrou · {formatBRL(item.expenseCents)} saiu</span></p>
         ))}
       </div>
     </div>
@@ -180,12 +180,12 @@ export function SeriesChart({ data, dataKey, color, caption }: { data: Array<{ l
   const peak = Math.max(1, ...data.map((item) => Number(item[dataKey])));
   return (
     <div>
-      <div className="h-72">
+      <div className="h-64 min-w-0 sm:h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data}>
             <CartesianGrid stroke="var(--line)" vertical={false} />
-            <XAxis dataKey="label" stroke="var(--muted)" fontSize={12} tickLine={false} axisLine={false} />
-            <YAxis stroke="var(--muted)" fontSize={12} tickFormatter={axis} tickLine={false} axisLine={false} width={56} domain={[0, peak]} />
+            <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+            <YAxis stroke="var(--muted)" fontSize={10} tickFormatter={axis} tickLine={false} axisLine={false} width={40} domain={[0, peak]} />
             <Tooltip formatter={(value: number) => formatBRL(Number(value))} contentStyle={tooltipStyle} />
             <Bar dataKey={dataKey} fill={color} radius={[6, 6, 0, 0]}>
               <LabelList dataKey={dataKey} position="top" formatter={(value: number) => formatBRL(Number(value))} style={{ fill: "var(--ink)", fontSize: 11 }} />
@@ -200,21 +200,27 @@ export function SeriesChart({ data, dataKey, color, caption }: { data: Array<{ l
 
 export function CategoryChart({ data }: { data: Array<{ name: string; totalCents: number; color: string }> }) {
   const slices = data.filter((item) => item.totalCents > 0);
-  if (!slices.length) return <p className="text-sm leading-6 text-muted">Nenhuma despesa neste período. Quando você lançar uma, a categoria entra nesta pizza com o valor.</p>;
+  if (!slices.length) {
+    return (
+      <div className="grid h-64 place-items-center">
+        <p className="text-3xl font-semibold">{formatBRL(0)}</p>
+      </div>
+    );
+  }
   return <PieBlock data={slices.map((item) => ({ name: item.name, totalCents: item.totalCents, color: item.color }))} emptyNames={[]} />;
 }
 
 export function BalanceChart({ data }: { data: Array<{ label: string; balanceCents: number; projectedCents: number }> }) {
-  if (!data.some((item) => item.balanceCents || item.projectedCents)) return <LinePreview />;
+  if (!data.length) return <LinePreview />;
   const latest = data[data.length - 1];
   return (
     <div>
-    <div className="h-72">
+    <div className="h-64 min-w-0 sm:h-72">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
           <CartesianGrid stroke="var(--line)" vertical={false} />
-          <XAxis dataKey="label" stroke="var(--muted)" fontSize={12} tickLine={false} axisLine={false} />
-          <YAxis stroke="var(--muted)" fontSize={12} tickFormatter={axis} tickLine={false} axisLine={false} width={56} />
+          <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+          <YAxis stroke="var(--muted)" fontSize={10} tickFormatter={axis} tickLine={false} axisLine={false} width={40} />
           <Tooltip formatter={(value: number, name: string) => [formatBRL(Number(value)), name === "balanceCents" ? "Saldo realizado" : "Saldo projetado"]} contentStyle={tooltipStyle} />
           <Legend formatter={(value) => (value === "balanceCents" ? "Realizado" : "Projetado")} />
           <Line type="monotone" dataKey="balanceCents" stroke="var(--accent)" strokeWidth={2.4} dot={false} />

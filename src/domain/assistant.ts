@@ -66,7 +66,7 @@ export const intentSchema = z.object({
     .nullable(),
   query: z
     .object({
-      metric: z.enum(["available_balance", "month_overview", "forecast", "category_total", "upcoming", "can_afford", "account_balance"]).optional().nullable(),
+      metric: z.enum(["available_balance", "month_overview", "forecast", "category_total", "upcoming", "can_afford", "account_balance", "debt", "open_items", "cards"]).optional().nullable(),
       category_name: z.string().optional().nullable(),
       account_name: z.string().optional().nullable(),
       month: z.string().optional().nullable(),

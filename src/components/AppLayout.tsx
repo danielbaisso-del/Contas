@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { ArrowDownCircle, ArrowUpCircle, CalendarDays, CreditCard, LayoutDashboard, LogOut, Menu, Moon, PieChart, RefreshCw, Shield, Sun, X } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CalendarDays, CreditCard, LayoutDashboard, LogOut, Menu, Moon, PieChart, RefreshCw, Shield, Sun, Users, X } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useFinance } from "@/context/FinanceContext";
 import { useTheme } from "@/context/ThemeContext";
@@ -14,12 +14,13 @@ import { Button, Field, Input, Modal } from "@/components/ui";
 import { cx, errorMessage } from "@/lib/utils";
 
 const items = [
-  { to: "/", label: "Visão geral", icon: LayoutDashboard, end: true },
-  { to: "/receitas", label: "Receitas", icon: ArrowDownCircle, end: false },
-  { to: "/despesas", label: "Despesas", icon: ArrowUpCircle, end: false },
-  { to: "/compromissos", label: "A pagar e receber", icon: CalendarDays, end: false },
-  { to: "/cartoes", label: "Cartões", icon: CreditCard, end: false },
-  { to: "/relatorios", label: "Relatórios", icon: PieChart, end: false },
+  { to: "/", label: "Visão geral", short: "Visão", icon: LayoutDashboard, end: true },
+  { to: "/receitas", label: "Receitas", short: "Receitas", icon: ArrowDownCircle, end: false },
+  { to: "/despesas", label: "Despesas", short: "Despesas", icon: ArrowUpCircle, end: false },
+  { to: "/compromissos", label: "A pagar e receber", short: "Contas", icon: CalendarDays, end: false },
+  { to: "/cartoes", label: "Cartões", short: "Cartões", icon: CreditCard, end: false },
+  { to: "/relatorios", label: "Relatórios", short: "Gráficos", icon: PieChart, end: false },
+  { to: "/conjunto", label: "Juntos", short: "Juntos", icon: Users, end: false },
 ];
 
 export function AppLayout() {
@@ -84,22 +85,32 @@ export function AppLayout() {
       <aside className="fixed inset-y-0 left-0 hidden w-64 lg:block">{sidebar}</aside>
       {open ? <div className="fixed inset-0 z-40 lg:hidden"><button className="absolute inset-0 bg-slate-950/60" onClick={() => setOpen(false)} aria-label="Fechar" /><div className="relative h-full w-72">{sidebar}</div></div> : null}
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-canvas/90 px-4 py-3 backdrop-blur md:px-8">
+        <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-line bg-canvas/90 px-3 py-2 backdrop-blur sm:px-4 sm:py-3 md:px-8" style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}>
           <button className="rounded-xl border border-line p-2 lg:hidden" onClick={() => setOpen(true)} aria-label="Abrir menu"><Menu size={18} /></button>
-          <div className="hidden text-sm text-muted sm:block">Quanto tenho, quanto devo, o que falta e quanto sobra.</div>
-          <div className="ml-auto flex items-center gap-2">
-            <Button variant="secondary" onClick={() => navigate("/receitas?novo=1")}>Receita</Button>
-            <Button onClick={() => navigate("/despesas?novo=1")}>Despesa</Button>
+          <div className="hidden min-w-0 text-sm text-muted sm:block">Quanto tenho, quanto devo, o que falta e quanto sobra.</div>
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <Button variant="secondary" className="px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" onClick={() => navigate("/receitas?novo=1")}>Receita</Button>
+            <Button className="px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" onClick={() => navigate("/despesas?novo=1")}>Despesa</Button>
             <button className="rounded-xl border border-line p-2" onClick={() => void refresh()} aria-label="Atualizar"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /></button>
             <button className="rounded-xl border border-line p-2" onClick={toggle} aria-label="Alternar tema">{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}</button>
           </div>
         </header>
-        <main className="px-4 py-6 pb-28 md:px-8">
+        <main className="px-4 py-5 pb-32 md:px-8 lg:pb-10">
           {loading ? <div className="py-20 text-center text-sm text-muted">Organizando seus dados...</div> : null}
           {!loading && error ? <div className="rounded-3xl border border-line bg-surface p-6 text-sm leading-6">{error}</div> : null}
           {!loading && !error ? <div className="rise"><Outlet /></div> : null}
         </main>
       </div>
+      <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }} aria-label="Seções">
+        <div className="flex gap-1 overflow-x-auto px-2 py-2">
+          {items.map((item) => (
+            <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => cx("flex min-w-[4.5rem] flex-1 flex-col items-center gap-1 rounded-xl px-2 py-1.5 text-[10px] font-medium", isActive ? "bg-accent text-white" : "text-muted")}>
+              <item.icon size={16} />
+              {item.short}
+            </NavLink>
+          ))}
+        </div>
+      </nav>
       {inviteOpen && invites.length ? (
         <Modal title="Pedido para juntar as contas" onClose={() => { sessionStorage.setItem("contas-household-invite", invites.map((invite) => invite.id).join(",")); setInviteOpen(false); }}>
           <div className="space-y-4">
@@ -107,7 +118,7 @@ export function AppLayout() {
               <div key={invite.id} className="space-y-3 text-sm leading-6">
                 <p><strong>{invite.fromName}</strong>{invite.fromEmail ? ` (${invite.fromEmail})` : ""} quer ver com você os ganhos, os gastos e as contas futuras.</p>
                 <p className="text-muted">Se você aceitar, os dois passam a ter a aba Juntos. Sua conta pessoal continua separada, e cada pessoa lança no próprio acesso.</p>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button onClick={async () => { try { await respondInvite(invite.id, "accept"); setInvites((current) => current.filter((item) => item.id !== invite.id)); setInviteOpen(false); navigate("/conjunto"); } catch (caught) { toast(errorMessage(caught), "error"); } }}>Aceitar</Button>
                   <Button variant="secondary" onClick={async () => { try { await respondInvite(invite.id, "decline"); setInvites((current) => current.filter((item) => item.id !== invite.id)); setInviteOpen(false); } catch (caught) { toast(errorMessage(caught), "error"); } }}>Recusar</Button>
                 </div>
