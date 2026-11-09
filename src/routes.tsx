@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
 import { FinanceProvider } from "@/context/FinanceContext";
 import { ForgotPasswordPage, LoginPage, RegisterPage, ResetPasswordPage } from "@/pages/AuthPages";
+import { AdminPage } from "@/pages/AdminPage";
 import { AssistantPage } from "@/pages/AssistantPage";
 import { AccountsPage } from "@/pages/AccountsPage";
 import { CalendarPage } from "@/pages/CalendarPage";
@@ -52,6 +53,7 @@ export function AppRoutes() {
         <Route path="importar" element={<ImportPage />} />
         <Route path="assistente" element={<AssistantPage />} />
         <Route path="ajuda" element={<HelpPage />} />
+        <Route path="admin" element={<AdminPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -9,6 +9,7 @@ export class HttpError extends Error {
 
 interface NodeRequest {
   method?: string;
+  url?: string;
   headers: Headers | Record<string, string | string[] | undefined>;
   body?: unknown;
 }

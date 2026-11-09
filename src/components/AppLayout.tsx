@@ -1,11 +1,13 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useState } from "react";
-import { Bot, CalendarDays, CircleHelp, CreditCard, FileUp, Landmark, LayoutDashboard, LogOut, Menu, Moon, PieChart, Plus, RefreshCw, Repeat, Sparkles, Sun, Target, Wallet, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Bot, CalendarDays, CircleHelp, CreditCard, FileUp, Landmark, LayoutDashboard, LogOut, Menu, Moon, PieChart, Plus, RefreshCw, Repeat, Shield, Sparkles, Sun, Target, Wallet, X } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useFinance } from "@/context/FinanceContext";
 import { useTheme } from "@/context/ThemeContext";
+import { checkAdmin } from "@/services/admin";
 import { saveProfileName } from "@/services/data";
 import { supabase } from "@/services/supabase";
+import { GuideProvider } from "@/components/GuideCoach";
 import { Button, Field, Input, Modal } from "@/components/ui";
 import { cx } from "@/lib/utils";
 
@@ -30,8 +32,17 @@ export function AppLayout() {
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [admin, setAdmin] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [name, setName] = useState(profile?.fullName ?? "");
+
+  useEffect(() => {
+    if (!session) {
+      setAdmin(false);
+      return;
+    }
+    void checkAdmin().then(setAdmin).catch(() => setAdmin(false));
+  }, [session]);
 
   async function logout() {
     await supabase.auth.signOut();
@@ -48,7 +59,7 @@ export function AppLayout() {
         <button className="lg:hidden" onClick={() => setOpen(false)} aria-label="Fechar menu"><X size={18} /></button>
       </div>
       <nav className="flex-1 space-y-1 overflow-y-auto px-3">
-        {items.map((item) => (
+        {[...items, ...(admin ? [{ to: "/admin", label: "Cadastros", icon: Shield, end: false }] : [])].map((item) => (
           <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setOpen(false)} className={({ isActive }) => cx("flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm", isActive ? "bg-sidebar-active text-white" : "text-sidebar-muted hover:bg-white/5 hover:text-sidebar-ink")}>
             <item.icon size={18} />
             {item.label}
@@ -63,6 +74,7 @@ export function AppLayout() {
   );
 
   return (
+    <GuideProvider>
     <div className="min-h-screen bg-canvas text-ink">
       <aside className="fixed inset-y-0 left-0 hidden w-64 lg:block">{sidebar}</aside>
       {open ? <div className="fixed inset-0 z-40 lg:hidden"><button className="absolute inset-0 bg-slate-950/60" onClick={() => setOpen(false)} aria-label="Fechar" /><div className="relative h-full w-72">{sidebar}</div></div> : null}
@@ -76,7 +88,7 @@ export function AppLayout() {
             <button className="rounded-xl border border-line p-2" onClick={toggle} aria-label="Alternar tema">{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}</button>
           </div>
         </header>
-        <main className="px-4 py-6 md:px-8">
+        <main className="px-4 py-6 pb-28 md:px-8">
           {loading ? <div className="py-20 text-center text-sm text-muted">Organizando seus dados...</div> : null}
           {!loading && error ? <div className="rounded-3xl border border-line bg-surface p-6 text-sm leading-6">{error}</div> : null}
           {!loading && !error ? <div className="rise"><Outlet /></div> : null}
@@ -92,5 +104,6 @@ export function AppLayout() {
         </Modal>
       ) : null}
     </div>
+    </GuideProvider>
   );
 }

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { BalanceChart, CategoryChart, FlowChart } from "@/components/Charts";
 import { Delta, MoneyText } from "@/components/ui";
+import { useGuide } from "@/components/GuideCoach";
 import { useFinance } from "@/context/FinanceContext";
 import { buildDashboard, topCategorySlices } from "@/finance/engine";
 import { formatDateBR, formatMonthLabel, monthKey, shiftMonth } from "@/lib/dates";
@@ -11,6 +12,7 @@ import { statusLabel, typeLabel } from "@/lib/labels";
 
 export function DashboardPage() {
   const { data, today } = useFinance();
+  const { openGuide } = useGuide();
   const [month, setMonth] = useState(monthKey(today));
   const model = useMemo(() => buildDashboard(data, month, today), [data, month, today]);
   const categories = topCategorySlices(model.categories);
@@ -29,6 +31,11 @@ export function DashboardPage() {
           <button className="px-3 py-2" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Próximo mês"><ChevronRight size={16} /></button>
         </div>
       </div>
+
+      <button className="w-full rounded-3xl bg-accent p-5 text-left text-white" onClick={openGuide} type="button">
+        <p className="text-lg font-semibold">Organizar meu mês falando</p>
+        <p className="mt-1 max-w-2xl text-sm leading-6 text-white/80">A IA pergunta onde está o dinheiro, o que já entrou, o que já foi pago e o que falta pagar. Você só responde, falando ou escrevendo.</p>
+      </button>
 
       {!data.accounts.length ? (
         <div className="rounded-3xl border border-line bg-surface p-5 text-sm leading-6">

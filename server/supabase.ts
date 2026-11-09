@@ -9,7 +9,7 @@ function anonKey(): string {
   return envValue("SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY");
 }
 
-export async function requireUser(req: NodeRequest): Promise<{ id: string; token: string }> {
+export async function requireUser(req: NodeRequest): Promise<{ id: string; email: string; token: string }> {
   const header = readHeader(req, "authorization");
   const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
   if (!token) throw new HttpError(401, "Faça login novamente.");
@@ -19,7 +19,7 @@ export async function requireUser(req: NodeRequest): Promise<{ id: string; token
   const client = createClient(url, anon, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
   const { data, error } = await client.auth.getUser(token);
   if (error || !data.user) throw new HttpError(401, "Sua sessão expirou. Entre novamente.");
-  return { id: data.user.id, token };
+  return { id: data.user.id, email: data.user.email ?? "", token };
 }
 
 export function userClient(token: string): SupabaseClient {

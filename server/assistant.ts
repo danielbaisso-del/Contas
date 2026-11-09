@@ -1,9 +1,9 @@
-import { intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantResponse, type TransactionDraft } from "@/domain/assistant";
+import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantResponse, type TransactionDraft } from "@/domain/assistant";
 import { resolveAmountCents, resolveOccurredOn, suggestCategory } from "@/domain/resolveText";
 import { planBankInstallments, planCardInstallments, installmentsForDatabase } from "@/finance/installments";
 import { formatDateBR, todayISO } from "@/lib/dates";
-import { paymentMethodLabel, statusLabel } from "@/lib/labels";
-import { formatBRL } from "@/lib/money";
+import { accountTypeLabel, COLORS, paymentMethodLabel, statusLabel } from "@/lib/labels";
+import { formatBRL, parseMoneyToCents } from "@/lib/money";
 import { matchByName, normalizeText } from "@/lib/utils";
 import { mapAccount, mapCard, mapCategory, mapInvoice, mapRecurrence, mapTransaction } from "@/services/mappers";
 import type { FinanceData } from "@/types/models";
@@ -181,12 +181,94 @@ function buildTransfer(text: string, raw: NonNullable<Awaited<ReturnType<typeof 
   };
 }
 
+function amountFromSpeech(text: string): number | null {
+  const normalized = normalizeText(text);
+  if (/\b(zero|zerada|zerado|sem saldo)\b/.test(normalized)) return 0;
+  const explicit = resolveAmountCents(text, null);
+  if (explicit) return explicit;
+  const match = text.match(/\b\d{1,3}(?:\.\d{3})+(?:,\d{2})?\b|\b\d+(?:,\d{2})\b|\b\d{1,7}\b/);
+  if (!match) return null;
+  const cents = parseMoneyToCents(match[0]);
+  if (cents == null || cents < 0) return null;
+  return cents;
+}
+
+function accountNameFrom(text: string): string {
+  return text
+    .replace(/R\$\s*[\d.]+(?:,\d{1,2})?/gi, " ")
+    .replace(/\b\d{1,3}(?:\.\d{3})+(?:,\d{2})?\b/g, " ")
+    .replace(/\b\d+(?:,\d{2})\b/g, " ")
+    .replace(/\b\d{1,7}\b/g, " ")
+    .replace(/\b(tenho|tem|tinha|com|saldo|reais|real|minha|meu|uns|cerca|de|da|do|na|no|em|a|o|hoje|agora|conta|banco)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function inferAccountType(text: string): "checking" | "savings" | "cash" | "digital" | "other" {
+  const normalized = normalizeText(text);
+  if (/dinheiro|especie|bolso|carteira fisica/.test(normalized)) return "cash";
+  if (/poupanca|reserva/.test(normalized)) return "savings";
+  if (/mercado pago|picpay|paypal|carteira digital/.test(normalized)) return "digital";
+  return "checking";
+}
+
+function buildAccount(text: string, data: FinanceData, earlier: string): AssistantResponse {
+  const corpus = `${earlier}\n${text}`;
+  const amount = amountFromSpeech(text) ?? amountFromSpeech(corpus);
+  const name = accountNameFrom(text) || accountNameFrom(earlier);
+  if (!name || name.length < 2) {
+    return { reply: "Qual é o nome dessa conta? Exemplo: Nubank com R$ 1.200.", confirmation: null };
+  }
+  if (amount == null) {
+    return { reply: `Quanto tem na conta ${name} agora? Pode ser zero.`, confirmation: null };
+  }
+  const existing = data.accounts.find((account) => normalizeText(account.name) === normalizeText(name));
+  if (existing) {
+    return { reply: `A conta ${existing.name} já existe. Fale outra conta ou diga: só isso.`, confirmation: null };
+  }
+  const type = inferAccountType(`${name} ${text}`);
+  return {
+    reply: "Vou criar a conta com esse saldo inicial. Esse valor é o dinheiro que já está lá, não uma receita nova. Confirme se estiver certo.",
+    confirmation: {
+      kind: "account",
+      title: "Nova conta",
+      lines: [name, `Saldo inicial: ${formatBRL(amount)}`, `Tipo: ${accountTypeLabel(type)}`],
+      draft: {
+        name,
+        institution: name,
+        type,
+        initial_balance_cents: amount,
+        color: COLORS[data.accounts.length % COLORS.length] ?? COLORS[0],
+      },
+    },
+  };
+}
+
 async function confirmDraft(token: string, body: Record<string, unknown>, data: FinanceData): Promise<string> {
   const client = userClient(token);
   const today = todayISO();
   const { data: auth } = await client.auth.getUser(token);
   const userId = auth.user?.id;
   if (!userId) throw new HttpError(401, "Sua sessão expirou. Entre novamente.");
+  if (body.kind === "account") {
+    const parsed = accountDraftSchema.safeParse(body.draft);
+    if (!parsed.success) throw new HttpError(400, "A prévia da conta está incompleta. Fale o nome e o saldo de novo.");
+    const draft = parsed.data;
+    if (data.accounts.some((account) => normalizeText(account.name) === normalizeText(draft.name))) {
+      throw new HttpError(400, "Já existe uma conta com esse nome.");
+    }
+    const { error } = await client.from("accounts").insert({
+      user_id: userId,
+      name: draft.name,
+      institution: draft.institution,
+      type: draft.type,
+      initial_balance_cents: draft.initial_balance_cents,
+      color: draft.color,
+    });
+    if (error) throw new HttpError(400, "Não consegui criar a conta.");
+    return `Conta ${draft.name} criada com saldo inicial de ${formatBRL(draft.initial_balance_cents)}.`;
+  }
   if (body.kind === "transfer") {
     const parsed = transferDraftSchema.safeParse(body.draft);
     if (!parsed.success) throw new HttpError(400, "A prévia da transferência está incompleta. Monte o pedido novamente.");
@@ -294,11 +376,22 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       return;
     }
     const text = String(body.text ?? "").trim();
+    const guide = body.guide === "account" || body.guide === "income" || body.guide === "paid" || body.guide === "upcoming" ? body.guide : null;
     if (text.length < 2) throw new HttpError(400, "Escreva o que você quer fazer.");
     if (text.length > 2000) throw new HttpError(400, "A mensagem pode ter no máximo 2000 caracteres.");
-    await consumeAiQuota(user.id);
     const today = todayISO();
-    const forced = forcedQuery(text);
+    const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
+    const historyText = history.map((item) => {
+      const entry = item as { role?: string; content?: string };
+      return `${entry.role === "user" ? "Pessoa" : "Assistente"}: ${String(entry.content ?? "").slice(0, 300)}`;
+    }).join("\n");
+    if (guide === "account") {
+      const earlier = history.filter((item) => (item as { role?: string }).role === "user").map((item) => String((item as { content?: string }).content ?? "")).join(" ");
+      sendJson(res, 200, buildAccount(text, data, earlier));
+      return;
+    }
+    await consumeAiQuota(user.id);
+    const forced = guide ? null : forcedQuery(text);
     if (forced) {
       const amount = forced.metric === "can_afford" ? resolveAmountCents(text, null) : null;
       const installments = inferInstallments(text);
@@ -314,29 +407,31 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       sendJson(res, 200, { reply, confirmation: null });
       return;
     }
-    const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
-    const historyText = history.map((item) => {
-      const entry = item as { role?: string; content?: string };
-      return `${entry.role === "user" ? "Pessoa" : "Assistente"}: ${String(entry.content ?? "").slice(0, 300)}`;
-    }).join("\n");
+    const guideNote = guide === "income"
+      ? "A pessoa está informando uma receita que já entrou. Use action create_transaction, type income e status received."
+      : guide === "paid"
+        ? "A pessoa está informando uma despesa que já pagou. Use action create_transaction, type expense e status paid."
+        : guide === "upcoming"
+          ? "A pessoa está informando uma conta que ainda vai pagar. Use action create_transaction, type expense e status pending. Se citar um dia, use esse dia."
+          : "";
     const context = {
       hoje: today,
       contas: data.accounts.filter((account) => !account.archived).map((account) => account.name),
       cartoes: data.cards.filter((card) => !card.archived).map((card) => card.name),
       categorias: data.categories.map((category) => `${category.name} (${category.kind === "income" ? "receita" : "despesa"})`),
     };
-    const intent = await interpretIntent(`Contexto:\n${JSON.stringify(context)}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
-    if (intent.action === "query" && intent.query?.metric) {
+    const intent = await interpretIntent(`Contexto:\n${JSON.stringify(context)}\n${guideNote}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
+    if (!guide && intent.action === "query" && intent.query?.metric) {
       const amount = intent.query.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query.amount_cents;
       const reply = answerQuery({ ...intent.query, amount_cents: amount }, data, today, text);
       sendJson(res, 200, { reply, confirmation: null });
       return;
     }
-    if (intent.action === "create_transfer") {
+    if (!guide && intent.action === "create_transfer") {
       sendJson(res, 200, buildTransfer(text, intent.transfer, data, today));
       return;
     }
-    if (intent.action === "chat") {
+    if (!guide && intent.action === "chat") {
       const message = intent.message ?? "";
       sendJson(res, 200, {
         reply: /R\$\s*\d/.test(message)
@@ -346,7 +441,20 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       });
       return;
     }
-    sendJson(res, 200, buildTransaction(text, intent.draft, data, today));
+    const guidedDate = resolveOccurredOn(text, today, intent.draft?.occurred_on).date;
+    const guidedFuture = guidedDate > today;
+    const guidedDraft = guide
+      ? {
+          ...(intent.draft ?? {}),
+          type: guide === "income" ? "income" as const : "expense" as const,
+          status: guide === "income"
+            ? (guidedFuture ? "planned" as const : "received" as const)
+            : guide === "paid"
+              ? (guidedFuture ? "planned" as const : "paid" as const)
+              : (guidedFuture ? "planned" as const : "pending" as const),
+        }
+      : intent.draft;
+    sendJson(res, 200, buildTransaction(text, guidedDraft, data, today));
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 400;
     const message = error instanceof Error ? error.message : "Não consegui concluir o pedido.";

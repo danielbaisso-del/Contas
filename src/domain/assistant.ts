@@ -17,6 +17,14 @@ export const transactionDraftSchema = z.object({
   installments: z.number().int().min(1).max(48).optional(),
 });
 
+export const accountDraftSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  institution: z.string().trim().max(80),
+  type: z.enum(["checking", "savings", "cash", "digital", "other"]),
+  initial_balance_cents: z.number().int().min(0).max(100_000_000_00),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+});
+
 export const transferDraftSchema = z.object({
   description: z.string().trim().min(2).max(140),
   amount_cents: z.number().int().positive().max(100_000_000_00),
@@ -75,11 +83,13 @@ export const intentSchema = z.object({
 
 export type TransactionDraft = z.infer<typeof transactionDraftSchema>;
 export type TransferDraft = z.infer<typeof transferDraftSchema>;
+export type AccountDraft = z.infer<typeof accountDraftSchema>;
 export type Intent = z.infer<typeof intentSchema>;
 
 export type Confirmation =
   | { kind: "transaction" | "card_purchase" | "bank_installments"; title: string; lines: string[]; draft: TransactionDraft }
-  | { kind: "transfer"; title: string; lines: string[]; draft: TransferDraft };
+  | { kind: "transfer"; title: string; lines: string[]; draft: TransferDraft }
+  | { kind: "account"; title: string; lines: string[]; draft: AccountDraft };
 
 export interface AssistantResponse {
   reply: string;

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Field, Input, MoneyField, PageHeader, Select } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
-import type { AssistantResponse, Confirmation, TransactionDraft } from "@/domain/assistant";
+import type { AssistantResponse, Confirmation, TransactionDraft, TransferDraft } from "@/domain/assistant";
 import { planCardInstallments } from "@/finance/installments";
 import { formatDateBR } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
@@ -79,17 +79,20 @@ export function AssistantPage() {
   );
 }
 
-function ConfirmationCard({ confirmation, onConfirm, disabled }: { confirmation: Confirmation; onConfirm: (value: Confirmation) => void; disabled: boolean }) {
+export function ConfirmationCard({ confirmation, onConfirm, onDismiss, disabled, confirmLabel = "Confirmar e salvar" }: { confirmation: Confirmation; onConfirm: (value: Confirmation) => void; onDismiss?: () => void; disabled: boolean; confirmLabel?: string }) {
   const { data } = useFinance();
   const [draft, setDraft] = useState(confirmation.draft);
+  const isAccount = confirmation.kind === "account";
   const isTransfer = confirmation.kind === "transfer";
-  const transaction = !isTransfer ? draft as TransactionDraft : null;
+  const transaction = !isTransfer && !isAccount ? draft as TransactionDraft : null;
+  const transfer: TransferDraft | null = isTransfer ? draft as TransferDraft : null;
   const card = transaction?.card_id ? data.cards.find((item) => item.id === transaction.card_id) : null;
   const preview = transaction && card ? planCardInstallments({ totalCents: transaction.amount_cents, count: transaction.installments ?? 1, purchasedOn: transaction.occurred_on, closingDay: card.closingDay, dueDay: card.dueDay }) : [];
   return (
     <div className="mt-3 space-y-3 rounded-2xl bg-surface p-3 text-ink">
       <p className="font-medium">{confirmation.title}</p>
       {confirmation.lines.map((line) => <p key={line} className="text-xs text-muted">{line}</p>)}
+      {isAccount ? <p className="text-sm">Confira o nome e o saldo inicial. Se estiver errado, feche esta prévia e fale de novo.</p> : null}
       {transaction ? (
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Descrição"><Input value={transaction.description} onChange={(event) => setDraft({ ...transaction, description: event.target.value })} /></Field>
@@ -98,14 +101,17 @@ function ConfirmationCard({ confirmation, onConfirm, disabled }: { confirmation:
           <Field label="Categoria"><Select value={transaction.category_id ?? ""} onChange={(event) => setDraft({ ...transaction, category_id: event.target.value || null })}><option value="">Sem categoria</option>{data.categories.filter((item) => item.kind === transaction.type).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>
           {transaction.card_id ? <Field label="Cartão"><Select value={transaction.card_id} onChange={(event) => setDraft({ ...transaction, card_id: event.target.value })}>{data.cards.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field> : <Field label="Conta"><Select value={transaction.account_id ?? ""} onChange={(event) => setDraft({ ...transaction, account_id: event.target.value })}>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>}
         </div>
-      ) : (
+      ) : isTransfer ? (
         <div className="grid gap-3 md:grid-cols-2">
-          <MoneyField label="Valor" value={draft.amount_cents} onChange={(value) => setDraft({ ...draft, amount_cents: value ?? draft.amount_cents })} />
-          <Field label="Data"><Input type="date" value={draft.occurred_on} onChange={(event) => setDraft({ ...draft, occurred_on: event.target.value })} /></Field>
+          <MoneyField label="Valor" value={transfer?.amount_cents ?? 0} onChange={(value) => { if (transfer) setDraft({ ...transfer, amount_cents: value ?? transfer.amount_cents }); }} />
+          <Field label="Data"><Input type="date" value={transfer?.occurred_on ?? ""} onChange={(event) => { if (transfer) setDraft({ ...transfer, occurred_on: event.target.value }); }} /></Field>
         </div>
-      )}
+      ) : null}
       {preview.length ? <div className="text-xs text-muted">{preview.map((item) => <p key={item.number}>{item.number}/{item.total} vence em {formatDateBR(item.dueOn)} · {formatBRL(item.amountCents)}</p>)}</div> : null}
-      <Button disabled={disabled} onClick={() => onConfirm({ ...confirmation, draft } as Confirmation)}>Confirmar e salvar</Button>
+      <div className="flex gap-2">
+        <Button disabled={disabled} onClick={() => onConfirm({ ...confirmation, draft } as Confirmation)}>{confirmLabel}</Button>
+        {onDismiss ? <Button variant="ghost" disabled={disabled} onClick={onDismiss}>Quero corrigir</Button> : null}
+      </div>
     </div>
   );
 }
