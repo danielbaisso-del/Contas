@@ -9,7 +9,7 @@ import { defaultStatusFor } from "@/finance/recurrence";
 import { formatDateBR, isWithin, todayISO } from "@/lib/dates";
 import { PAYMENT_METHODS, paymentMethodLabel, statusLabel, typeLabel } from "@/lib/labels";
 import { errorMessage, normalizeText } from "@/lib/utils";
-import { createBankInstallments, createCardPurchase, deleteCategory, deleteInstallmentGroup, deleteTransaction, saveCategory, saveRecurrence, saveTransaction, type TransactionInput } from "@/services/data";
+import { createBankInstallments, createCardPurchase, deleteCategory, deleteInstallmentGroup, moveToTrash, saveCategory, saveRecurrence, saveTransaction, type TransactionInput } from "@/services/data";
 import type { FinanceData, Transaction, TransactionStatus, TransactionType } from "@/types/models";
 
 function canDelete(transaction: Transaction, data: FinanceData): string | null {
@@ -80,8 +80,8 @@ export function TransactionsPage() {
     if (transaction.installmentGroupId && group === false && !(await confirm("Apagar somente esta parcela?"))) return;
     try {
       if (group && transaction.installmentGroupId) await deleteInstallmentGroup(transaction.installmentGroupId);
-      else await deleteTransaction(transaction.id);
-      toast("Lançamento apagado.");
+      else await moveToTrash(transaction.id, transaction.notes);
+      toast("Foi para a lixeira. Dá para reativar na aba Lixeira.");
       await refresh();
     } catch (error) { toast(errorMessage(error), "error"); }
   }

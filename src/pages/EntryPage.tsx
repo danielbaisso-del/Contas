@@ -10,7 +10,7 @@ import { formatDateBR, formatMonthLabel, todayISO } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 import { errorMessage } from "@/lib/utils";
 import { COLORS } from "@/lib/labels";
-import { createBankInstallments, deleteInstallmentGroup, deleteTransaction, saveCategory, saveRecurrence, saveTransaction, setRecurrenceStatus } from "@/services/data";
+import { createBankInstallments, deleteInstallmentGroup, moveToTrash, saveCategory, saveRecurrence, saveTransaction } from "@/services/data";
 import type { Transaction, TransactionStatus } from "@/types/models";
 
 type Mode = "income" | "expense";
@@ -63,14 +63,11 @@ function EntryPage({ mode }: { mode: Mode }) {
   async function remove(item: Transaction) {
     if (item.installmentGroupId) {
       if (!(await confirm(`Apagar todas as parcelas de ${item.description}? Elas saem de todos os meses.`))) return;
-    } else if (item.recurrenceId) {
-      if (!(await confirm(`Encerrar a conta fixa ${item.description}? Ela sai dos meses que ainda não foram pagos.`))) return;
-    } else if (!(await confirm(`Apagar ${item.description}?`))) return;
+    } else if (!(await confirm(`Enviar ${item.description} para a lixeira? Dá para reativar depois.`))) return;
     try {
       if (item.installmentGroupId) await deleteInstallmentGroup(item.installmentGroupId);
-      else if (item.recurrenceId) await setRecurrenceStatus(item.recurrenceId, "cancelled");
-      else await deleteTransaction(item.id);
-      toast("Lançamento apagado.");
+      else await moveToTrash(item.id, item.notes);
+      toast("Foi para a lixeira. Dá para reativar na aba Lixeira.");
       await refresh();
     } catch (error) {
       toast(errorMessage(error), "error");

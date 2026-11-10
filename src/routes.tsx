@@ -17,6 +17,7 @@ import { HelpPage } from "@/pages/HelpPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { RecurrencesPage } from "@/pages/RecurrencesPage";
 import { ReportsPage } from "@/pages/ReportsPage";
+import { TrashPage } from "@/pages/TrashPage";
 import { SimulatorPage } from "@/pages/SimulatorPage";
 import type { ReactNode } from "react";
 
@@ -65,6 +66,7 @@ export function AppRoutes() {
         <Route path="simulador" element={<SimulatorPage />} />
         <Route path="metas" element={<GoalsPage />} />
         <Route path="relatorios" element={<ReportsPage />} />
+        <Route path="lixeira" element={<TrashPage />} />
         <Route path="importar" element={<ImportPage />} />
         <Route path="assistente" element={<AssistantPage />} />
         <Route path="ajuda" element={<HelpPage />} />

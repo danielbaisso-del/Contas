@@ -10,6 +10,7 @@ import type { AssistantChart, AssistantPlace, AssistantResponse, Confirmation, I
 import { isSkip } from "@/domain/guide";
 import { errorMessage } from "@/lib/utils";
 import { askAssistant } from "@/services/ai";
+import { loadAssistantMessages, saveAssistantMessage } from "@/services/data";
 import { Button } from "@/components/ui";
 
 interface ChatItem {
@@ -103,6 +104,29 @@ export function GuideProvider({ children }: { children: ReactNode }) {
   useEffect(() => () => recognition.current?.stop(), []);
 
   useEffect(() => {
+    let cancel = false;
+    void loadAssistantMessages().then((messages) => {
+      if (cancel || !messages.length) return;
+      const restored = messages.map((message) => {
+        const payload = message.payload && typeof message.payload === "object" ? message.payload as { confirmation?: Confirmation | null; chart?: AssistantChart | null; place?: AssistantPlace | null; interview?: InterviewState | null } : {};
+        return {
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          confirmation: payload.confirmation ?? null,
+          chart: payload.chart ?? null,
+          place: payload.place ?? null,
+        };
+      });
+      setItems((current) => (current.some((item) => item.role === "user") ? current : restored));
+      const last = [...messages].reverse().find((message) => message.role === "assistant");
+      const interviewSaved = last?.payload && typeof last.payload === "object" ? (last.payload as { interview?: InterviewState | null }).interview : null;
+      if (interviewSaved) setInterview((current) => current ?? interviewSaved);
+    }).catch(() => undefined);
+    return () => { cancel = true; };
+  }, []);
+
+  useEffect(() => {
     if (financeLoading || sessionStorage.getItem("contas-guide-auto")) return;
     if (data.accounts.some((account) => !account.archived)) return;
     sessionStorage.setItem("contas-guide-auto", "1");
@@ -138,8 +162,9 @@ export function GuideProvider({ children }: { children: ReactNode }) {
       stopEntry(content);
       return;
     }
-    const history = items.slice(-6).map((item) => ({ role: item.role, content: item.content }));
+    const history = items.slice(-20).map((item) => ({ role: item.role, content: item.content }));
     setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null, chart: null, place: null }]);
+    if (!group) void saveAssistantMessage("user", content).catch(() => undefined);
     setLoading(true);
     try {
       const response = await askAssistant({ mode: "interpret", text: content, history, guide: group ? undefined : guide, interview: group ? null : currentInterview, household: group });
@@ -147,6 +172,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
       setInterview(response.interview ?? null);
       if (response.saved) await refresh();
       setItems((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: response.reply, confirmation: response.confirmation, chart: response.chart ?? null, place: response.place ?? null }]);
+      if (!group) void saveAssistantMessage("assistant", response.reply, { confirmation: response.confirmation, chart: response.chart ?? null, place: response.place ?? null, interview: response.interview ?? null }).catch(() => undefined);
     } catch (error) {
       toast(errorMessage(error), "error");
     } finally {
@@ -201,9 +227,8 @@ export function GuideProvider({ children }: { children: ReactNode }) {
 
   function choose(action: (typeof ACTIONS)[number]) {
     if (action.kind === "ask") {
-      setInterview(null);
       setAccountMode(false);
-      void send(action.text, { guide: null, interview: null });
+      void send(action.text, { guide: null, interview });
       return;
     }
     if (action.kind === "account") {
@@ -217,7 +242,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     void send(action.text, { guide: null, interview: null });
   }
 
-  const accounts = data.accounts.filter((account) => !account.archived);
+  const accounts = data.accounts;
   const followUps = interview?.amountCents != null && !interview.description
     ? data.categories.filter((category) => category.kind === (interview.kind === "income" ? "income" : "expense")).slice(0, 6).map((category) => category.name)
     : interview?.description && !interview.occurredOn

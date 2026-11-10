@@ -1,5 +1,5 @@
 import { planBankInstallments, planCardInstallments } from "@/finance/installments";
-import { addDays, formatMonthShort, isWithin, monthKey, monthRange, shiftMonth } from "@/lib/dates";
+import { addDays, formatMonthShort, isWithin, monthKey, monthRange, shiftMonth, toISODate } from "@/lib/dates";
 import type { Account, CardInvoice, CreditCard, FinanceData, Goal, Transaction } from "@/types/models";
 
 export interface CashSnapshot {
@@ -19,20 +19,63 @@ export function isRealized(transaction: Transaction, asOf: string): boolean {
   return false;
 }
 
-export function accountBalance(account: Account, transactions: Transaction[], asOf: string): number {
-  let balance = account.initialBalanceCents;
-  for (const transaction of transactions) {
-    if (!isRealized(transaction, asOf)) continue;
-    if (transaction.accountId === account.id && (transaction.type === "income")) balance += transaction.amountCents;
-    if (transaction.accountId === account.id && (transaction.type === "expense" || transaction.type === "transfer" || transaction.type === "invoice_payment")) {
-      balance -= transaction.amountCents;
-    }
-    if (transaction.type === "transfer" && transaction.destinationAccountId === account.id) balance += transaction.amountCents;
-  }
-  return balance;
+export interface BalanceParts {
+  initialCents: number;
+  inCents: number;
+  outCents: number;
+  balanceCents: number;
 }
 
-export function totalBalance(accounts: Account[], transactions: Transaction[], asOf: string, includeArchived = false): number {
+export function openingOn(account: Account): string {
+  const raw = account.createdAt ?? "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw.slice(0, 10) || "1970-01-01";
+  return toISODate(date);
+}
+
+export function openingIncome(accounts: Account[], start: string, end: string, asOf?: string): number {
+  return accounts.reduce((sum, account) => {
+    if (account.initialBalanceCents <= 0) return sum;
+    const opened = openingOn(account);
+    if (opened < start || opened > end) return sum;
+    if (asOf && opened > asOf) return sum;
+    return sum + account.initialBalanceCents;
+  }, 0);
+}
+
+export function inflowDates(data: Pick<FinanceData, "accounts" | "transactions">, start: string, end: string, asOf: string): string[] {
+  const dates = new Set<string>();
+  for (const transaction of data.transactions) {
+    if (transaction.type !== "income" || transaction.status !== "received") continue;
+    if (!isWithin(transaction.occurredOn, start, end) || transaction.occurredOn > asOf) continue;
+    dates.add(transaction.occurredOn);
+  }
+  for (const account of data.accounts) {
+    const opened = openingOn(account);
+    if (account.initialBalanceCents > 0 && isWithin(opened, start, end) && opened <= asOf) dates.add(opened);
+  }
+  return [...dates].sort();
+}
+
+export function balanceParts(account: Account, transactions: Transaction[], asOf: string): BalanceParts {
+  let inCents = 0;
+  let outCents = 0;
+  for (const transaction of transactions) {
+    if (!isRealized(transaction, asOf)) continue;
+    if (transaction.accountId === account.id && transaction.type === "income") inCents += transaction.amountCents;
+    if (transaction.accountId === account.id && (transaction.type === "expense" || transaction.type === "transfer" || transaction.type === "invoice_payment")) outCents += transaction.amountCents;
+    if (transaction.type === "transfer" && transaction.destinationAccountId === account.id) inCents += transaction.amountCents;
+  }
+  const initialCents = openingOn(account) <= asOf ? account.initialBalanceCents : 0;
+  return { initialCents, inCents, outCents, balanceCents: initialCents + inCents - outCents };
+}
+
+export function accountBalance(account: Account, transactions: Transaction[], asOf: string): number {
+  return balanceParts(account, transactions, asOf).balanceCents;
+}
+
+export function totalBalance(accounts: Account[], transactions: Transaction[], asOf: string, includeArchived = true): number {
   return accounts
     .filter((account) => includeArchived || !account.archived)
     .reduce((sum, account) => sum + accountBalance(account, transactions, asOf), 0);
@@ -90,11 +133,10 @@ export function monthIncome(transactions: Transaction[], month: string, mode: "r
   }, 0);
 }
 
-export function unpaidInstallmentCents(transactions: Transaction[], month: string): number {
+export function unpaidBankCents(transactions: Transaction[], month: string): number {
   const { start, end } = monthRange(month);
   return transactions.reduce((sum, transaction) => {
-    if (transaction.type !== "expense" || transaction.creditCardId || (!transaction.installmentGroupId && !transaction.recurrenceId)) return sum;
-    if (transaction.status === "paid") return sum;
+    if (transaction.type !== "expense" || transaction.creditCardId || transaction.status === "paid") return sum;
     if (!isWithin(transaction.occurredOn, start, end)) return sum;
     return sum + transaction.amountCents;
   }, 0);
@@ -103,7 +145,12 @@ export function unpaidInstallmentCents(transactions: Transaction[], month: strin
 export function appendInstallmentMonths(data: FinanceData, history: HistoryPoint[], today: string, limit = 12): HistoryPoint[] {
   const last = history[history.length - 1]?.month ?? "";
   const future = [...new Set(data.transactions
-    .filter((item) => (item.installmentGroupId || item.recurrenceId) && item.occurredOn.slice(0, 7) > last)
+    .filter((item) => {
+      if (item.occurredOn.slice(0, 7) <= last) return false;
+      if (item.type === "income") return item.status !== "received";
+      if (item.type === "expense") return item.status !== "paid";
+      return false;
+    })
     .map((item) => item.occurredOn.slice(0, 7)))]
     .sort()
     .slice(0, limit);
@@ -180,8 +227,8 @@ export function monthlyHistory(data: FinanceData, month: string, today: string, 
     points.push({
       month: key,
       label: `${formatMonthShort(key)}/${key.slice(2, 4)}`,
-      incomeCents: monthIncome(data.transactions, key, "received"),
-      expenseCents: monthSpending(data.transactions, key) + unpaidInstallmentCents(data.transactions, key),
+      incomeCents: monthIncome(data.transactions, key, "expected") + openingIncome(data.accounts, range.start, range.end),
+      expenseCents: monthSpending(data.transactions, key) + unpaidBankCents(data.transactions, key),
       balanceCents: totalBalance(data.accounts, data.transactions, isCurrent ? today : range.end),
       projectedCents: isFuture || isCurrent ? projectCash(data, range.end, today) : totalBalance(data.accounts, data.transactions, range.end),
     });
@@ -194,16 +241,10 @@ export interface CategorySlice {
   name: string;
   totalCents: number;
   color: string;
+  date: string | null;
 }
 
-export function expensesByCategory(data: FinanceData, month: string): CategorySlice[] {
-  const { start, end } = monthRange(month);
-  const totals = new Map<string, number>();
-  for (const transaction of data.transactions) {
-    if (transaction.type !== "expense" || !isWithin(transaction.occurredOn, start, end)) continue;
-    const key = transaction.categoryId ?? "none";
-    totals.set(key, (totals.get(key) ?? 0) + transaction.amountCents);
-  }
+function toCategorySlices(data: FinanceData, totals: Map<string, number>, dates: Map<string, string> = new Map()): CategorySlice[] {
   return [...totals.entries()]
     .map(([id, totalCents]) => {
       const category = data.categories.find((item) => item.id === id);
@@ -212,16 +253,65 @@ export function expensesByCategory(data: FinanceData, month: string): CategorySl
         name: category?.name ?? "Sem categoria",
         totalCents,
         color: category?.color ?? "#64748b",
+        date: dates.get(id) ?? null,
       };
     })
     .sort((a, b) => b.totalCents - a.totalCents);
+}
+
+function rememberDate(dates: Map<string, string>, key: string, date: string) {
+  const current = dates.get(key);
+  if (!current || date < current) dates.set(key, date);
+}
+
+export function expensesByCategory(data: FinanceData, month: string): CategorySlice[] {
+  const { start, end } = monthRange(month);
+  const totals = new Map<string, number>();
+  const dates = new Map<string, string>();
+  for (const transaction of data.transactions) {
+    if (transaction.type !== "expense" || !isWithin(transaction.occurredOn, start, end)) continue;
+    const key = transaction.categoryId ?? "none";
+    totals.set(key, (totals.get(key) ?? 0) + transaction.amountCents);
+    rememberDate(dates, key, effectiveDate(transaction));
+  }
+  return toCategorySlices(data, totals, dates);
+}
+
+export function categoryMovement(data: FinanceData, month: string): { paid: CategorySlice[]; pending: CategorySlice[] } {
+  const { start, end } = monthRange(month);
+  const paid = new Map<string, number>();
+  const pending = new Map<string, number>();
+  const paidDates = new Map<string, string>();
+  const pendingDates = new Map<string, string>();
+  for (const transaction of data.transactions) {
+    if (transaction.type !== "expense" || !isWithin(transaction.occurredOn, start, end)) continue;
+    const key = transaction.categoryId ?? "none";
+    const stillOpen = !transaction.creditCardId && transaction.status !== "paid";
+    const bucket = stillOpen ? pending : paid;
+    const dates = stillOpen ? pendingDates : paidDates;
+    bucket.set(key, (bucket.get(key) ?? 0) + transaction.amountCents);
+    rememberDate(dates, key, effectiveDate(transaction));
+  }
+  return { paid: toCategorySlices(data, paid, paidDates), pending: toCategorySlices(data, pending, pendingDates) };
+}
+
+export function ledgerTotals(accounts: Account[], transactions: Transaction[], asOf: string) {
+  return accounts.reduce((sum, account) => {
+    const parts = balanceParts(account, transactions, asOf);
+    return {
+      initialCents: sum.initialCents + parts.initialCents,
+      inCents: sum.inCents + parts.inCents,
+      outCents: sum.outCents + parts.outCents,
+      balanceCents: sum.balanceCents + parts.balanceCents,
+    };
+  }, { initialCents: 0, inCents: 0, outCents: 0, balanceCents: 0 });
 }
 
 export function topCategorySlices(slices: CategorySlice[], limit = 6): CategorySlice[] {
   if (slices.length <= limit) return slices;
   const head = slices.slice(0, limit - 1);
   const rest = slices.slice(limit - 1).reduce((sum, slice) => sum + slice.totalCents, 0);
-  return [...head, { id: "others", name: "Outras", totalCents: rest, color: "#64748b" }];
+  return [...head, { id: "others", name: "Outras", totalCents: rest, color: "#64748b", date: null }];
 }
 
 export function upcomingItems(data: FinanceData, today: string, limit = 6): UpcomingItem[] {
@@ -285,9 +375,9 @@ export function buildDashboard(data: FinanceData, month: string, today: string):
   const end = monthRange(month).end;
   return {
     availableCents: totalBalance(data.accounts, data.transactions, today),
-    incomeCents: monthIncome(data.transactions, month, "received"),
-    previousIncomeCents: monthIncome(data.transactions, previous, "received"),
-    incomeExpectedCents: monthIncome(data.transactions, month, "expected"),
+    incomeCents: monthIncome(data.transactions, month, "received") + openingIncome(data.accounts, monthRange(month).start, monthRange(month).end, today),
+    previousIncomeCents: monthIncome(data.transactions, previous, "received") + openingIncome(data.accounts, monthRange(previous).start, monthRange(previous).end, today),
+    incomeExpectedCents: monthIncome(data.transactions, month, "expected") + openingIncome(data.accounts, monthRange(month).start, monthRange(month).end),
     spendingCents: monthSpending(data.transactions, month),
     previousSpendingCents: monthSpending(data.transactions, previous),
     pendingCents: pending.reduce((sum, transaction) => sum + transaction.amountCents, 0),
@@ -509,6 +599,7 @@ export function buildReport(data: FinanceData, fromMonth: string, toMonth: strin
   const start = monthRange(fromMonth).start;
   const end = monthRange(toMonth).end;
   const categoryTotals = new Map<string, number>();
+  const categoryDates = new Map<string, string>();
   let recurringCents = 0;
   let futureCommitmentsCents = 0;
   for (const transaction of data.transactions) {
@@ -516,6 +607,7 @@ export function buildReport(data: FinanceData, fromMonth: string, toMonth: strin
     if (transaction.type === "expense") {
       const key = transaction.categoryId ?? "none";
       categoryTotals.set(key, (categoryTotals.get(key) ?? 0) + transaction.amountCents);
+      rememberDate(categoryDates, key, effectiveDate(transaction));
       if (transaction.recurrenceId) recurringCents += transaction.amountCents;
     }
   }
@@ -535,6 +627,7 @@ export function buildReport(data: FinanceData, fromMonth: string, toMonth: strin
         name: data.categories.find((category) => category.id === id)?.name ?? "Sem categoria",
         totalCents,
         color: data.categories.find((category) => category.id === id)?.color ?? "#64748b",
+        date: categoryDates.get(id) ?? null,
       }))
       .sort((a, b) => b.totalCents - a.totalCents),
     cards: data.cards.map((card) => ({ id: card.id, name: card.name, totalCents: cardSpending(data, card.id, start, end) })),

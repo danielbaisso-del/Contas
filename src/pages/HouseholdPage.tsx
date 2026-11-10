@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { AnswerChart, BalanceChart, CategoryChart, FlowChart } from "@/components/Charts";
+import { AnswerChart, BalanceChart, BridgeChart, CategoryChart, FlowChart, type BridgeStep } from "@/components/Charts";
 import { PlaceLink } from "@/components/PlaceLink";
 import { Button, Field, Input, MoneyText, PageHeader } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
 import type { AssistantResponse } from "@/domain/assistant";
-import { appendInstallmentMonths, buildDashboard } from "@/finance/engine";
-import { formatDateBR, formatMonthLabel, monthKey, shiftMonth } from "@/lib/dates";
+import { appendInstallmentMonths, buildDashboard, categoryMovement, inflowDates, ledgerTotals, openingIncome } from "@/finance/engine";
+import { formatDateBR, formatMonthLabel, monthKey, monthRange, shiftMonth } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 import { errorMessage } from "@/lib/utils";
 import { askAssistant } from "@/services/ai";
@@ -103,6 +103,28 @@ export function HouseholdPage() {
   }
 
   const model = useMemo(() => (finance ? buildDashboard(finance.data, month, today) : null), [finance, month, today]);
+  const movement = useMemo(() => (finance ? categoryMovement(finance.data, month) : { paid: [], pending: [] }), [finance, month]);
+  const ledger = useMemo(() => (finance ? ledgerTotals(finance.data.accounts, finance.data.transactions, today) : null), [finance, today]);
+  const bridge = useMemo(() => {
+    if (!ledger || !model || !finance) return [];
+    const range = monthRange(month);
+    const pending = movement.pending.filter((item) => item.totalCents > 0);
+    const openedInMonth = openingIncome(finance.data.accounts, range.start, range.end, today);
+    const entryDates = inflowDates(finance.data, range.start, range.end, today);
+    const afterPending = ledger.balanceCents - pending.reduce((sum, item) => sum + item.totalCents, 0);
+    const gap = model.projectedEndCents - afterPending;
+    const steps: BridgeStep[] = [
+      { label: "Começo", cents: Math.max(0, ledger.initialCents - openedInMonth), kind: "total", date: range.start },
+      { label: "Entrou", cents: ledger.inCents + openedInMonth, kind: "in", date: entryDates[0] ?? null },
+      { label: "Saiu", cents: ledger.outCents, kind: "out" },
+      { label: "Agora", cents: ledger.balanceCents, kind: "total", date: today },
+      ...pending.map((item) => ({ label: item.name, cents: item.totalCents, kind: "out" as const, date: item.date })),
+    ];
+    if (gap > 0) steps.push({ label: "Ainda entra", cents: gap, kind: "in" });
+    if (gap < 0) steps.push({ label: "Resto a sair", cents: -gap, kind: "out" });
+    steps.push({ label: "Previsto", cents: model.projectedEndCents, kind: "forecast", date: range.end });
+    return steps;
+  }, [finance, ledger, model, month, movement.pending, today]);
   const chartHistory = useMemo(() => (finance && model ? appendInstallmentMonths(finance.data, model.history, today) : []), [finance, model, today]);
   const people = useMemo(() => (finance ? finance.parts.map((part) => {
     const dash = buildDashboard(part.data, month, today);
@@ -204,10 +226,15 @@ export function HouseholdPage() {
           </section>
 
           <section id="mes" key={month} className="grid gap-4 xl:grid-cols-2">
-            <article id="categorias" className="min-w-0 rounded-3xl border border-line bg-surface p-5">
-              <h2 className="font-semibold">Despesas por categoria</h2>
-              <p className="mb-4 mt-1 text-sm text-muted">A pizza inteira é o total de ganhos do grupo. Cada fatia é o que a categoria consumiu desses ganhos.</p>
-              <CategoryChart data={model.categories} incomeCents={model.incomeCents} />
+            <article id="categorias" className="min-w-0 rounded-3xl border border-line bg-surface p-5 xl:col-span-2">
+              <h2 className="font-semibold">Como o saldo do grupo chega no previsto</h2>
+              <p className="mb-4 mt-1 text-sm text-muted">Começo, mais o que já entrou, menos o que já saiu. As categorias são o que ainda sai em {formatMonthLabel(month)}.</p>
+              <BridgeChart steps={bridge} />
+            </article>
+            <article className="min-w-0 rounded-3xl border border-line bg-surface p-5">
+              <h2 className="font-semibold">Por categoria</h2>
+              <p className="mb-4 mt-1 text-sm text-muted">O centro é o que entrou em {formatMonthLabel(month)}. Cada fatia é um gasto.</p>
+              <CategoryChart receivedCents={model.incomeCents} receivedOn={inflowDates(finance.data, monthRange(month).start, monthRange(month).end, today).map((date) => formatDateBR(date)).join(" · ")} slices={[...movement.paid.map((item) => ({ ...item, status: "Já saiu" })), ...movement.pending.map((item) => ({ ...item, status: "A pagar" }))]} />
             </article>
             <article id="pessoas" className="rounded-3xl border border-line bg-surface p-5">
               <h2 className="font-semibold">Cada pessoa</h2>

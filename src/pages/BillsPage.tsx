@@ -9,7 +9,7 @@ import { formatDateBR, todayISO } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 import { enableDueNotices, dueNoticesEnabled } from "@/lib/dueNotice";
 import { errorMessage } from "@/lib/utils";
-import { saveRecurrence, saveTransaction, setRecurrenceStatus } from "@/services/data";
+import { moveToTrash, saveRecurrence, saveTransaction, setRecurrenceStatus } from "@/services/data";
 import type { Recurrence, Transaction } from "@/types/models";
 
 export function BillsPage() {
@@ -63,7 +63,7 @@ export function BillsPage() {
                 <p className={`mt-1 text-xs ${late ? "text-expense" : "text-muted"}`}>{income ? "A receber" : "A pagar"} · {formatDateBR(when)}{late ? " · vencida" : ""}</p>
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <MoneyText cents={item.amountCents} tone={income ? "income" : "expense"} />
-                  <Button variant="secondary" onClick={() => void settle(item)}>{income ? "Recebi" : "Paguei"}</Button>
+                  <div className="flex gap-2"><Button variant="secondary" onClick={() => void settle(item)}>{income ? "Recebi" : "Paguei"}</Button><Button variant="ghost" onClick={() => void moveToTrash(item.id, item.notes).then(() => refresh()).then(() => toast("Foi para a lixeira.")).catch((error) => toast(errorMessage(error), "error"))}>Lixeira</Button></div>
                 </div>
               </article>
             );
@@ -107,7 +107,7 @@ export function BillsPage() {
                     </td>
                     <td><MoneyText cents={item.amountCents} tone={income ? "income" : "expense"} /></td>
                     <td className={late ? "text-expense" : ""}>{formatDateBR(when)}</td>
-                    <td className="px-4 text-right"><Button variant="secondary" onClick={() => void settle(item)}>{income ? "Recebi" : "Paguei"}</Button></td>
+                    <td className="px-4 text-right"><div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => void settle(item)}>{income ? "Recebi" : "Paguei"}</Button><Button variant="ghost" onClick={() => void moveToTrash(item.id, item.notes).then(() => refresh()).then(() => toast("Foi para a lixeira.")).catch((error) => toast(errorMessage(error), "error"))}>Lixeira</Button></div></td>
                   </tr>
                 );
               })}

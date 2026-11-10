@@ -9,7 +9,7 @@ import { formatDateBR, todayISO } from "@/lib/dates";
 import { COLORS } from "@/lib/labels";
 import { formatBRL } from "@/lib/money";
 import { errorMessage } from "@/lib/utils";
-import { createCardPurchase, payInvoice, saveCard, setCardArchived, undoInvoicePayment } from "@/services/data";
+import { createCardPurchase, moveGroupToTrash, moveToTrash, payInvoice, saveCard, setCardArchived, undoInvoicePayment } from "@/services/data";
 import type { CreditCard } from "@/types/models";
 
 export function CardsPage() {
@@ -103,7 +103,7 @@ export function CardDetailPage() {
                 <MoneyText cents={total} tone="expense" />
               </div>
               <div className="mt-3 space-y-1 text-sm">
-                {purchases.filter((purchase) => purchase.invoiceId === invoice.id).map((purchase) => <p key={purchase.id} className="flex justify-between text-muted"><span>{purchase.description}{purchase.installmentNumber ? ` · ${purchase.installmentNumber}/${purchase.installmentTotal}` : ""}</span><span>{formatBRL(purchase.amountCents)}</span></p>)}
+                {purchases.filter((purchase) => purchase.invoiceId === invoice.id).map((purchase) => <p key={purchase.id} className="flex justify-between gap-3 text-muted"><span>{purchase.description}{purchase.installmentNumber ? ` · ${purchase.installmentNumber}/${purchase.installmentTotal}` : ""}</span><span className="flex items-center gap-2">{formatBRL(purchase.amountCents)}{invoice.status === "paid" ? null : <button className="text-xs text-expense" onClick={() => void (purchase.installmentGroupId ? moveGroupToTrash(purchase.installmentGroupId) : moveToTrash(purchase.id, purchase.notes)).then(() => refresh()).then(() => toast("Compra foi para a lixeira.")).catch((error) => toast(errorMessage(error), "error"))}>Lixeira</button>}</span></p>)}
               </div>
               {invoice.status !== "paid" ? <Button className="mt-4" onClick={() => setPaying(invoice.id)}>Pagar fatura</Button> : <Button className="mt-4" variant="secondary" onClick={async () => { if (await confirm("Desfazer o pagamento devolve o valor à conta e reabre a fatura.")) { await undoInvoicePayment(invoice.id); await refresh(); } }}>Desfazer pagamento</Button>}
             </article>

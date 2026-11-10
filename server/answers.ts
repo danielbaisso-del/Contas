@@ -1,4 +1,4 @@
-import { accountBalance, buildDashboard, cardCommittedCents, invoiceTotal, projectCash, simulatePurchase, spendingByCategoryRange, totalBalance, upcomingItems } from "@/finance/engine";
+import { accountBalance, balanceParts, buildDashboard, cardCommittedCents, categoryMovement, invoiceTotal, ledgerTotals, openingOn, projectCash, simulatePurchase, spendingByCategoryRange, upcomingItems } from "@/finance/engine";
 import { addDays, formatDateBR, formatMonthLabel, monthKey, monthRange, shiftMonth } from "@/lib/dates";
 import { formatBRL, percentLabel } from "@/lib/money";
 import { normalizeText } from "@/lib/utils";
@@ -41,33 +41,51 @@ export function answerQuery(query: QueryDraft, data: FinanceData, today: string,
     if (query.account_name) {
       const account = data.accounts.find((item) => item.name.toLocaleLowerCase("pt-BR").includes(query.account_name!.toLocaleLowerCase("pt-BR")));
       if (!account) return `Não encontrei essa conta. Você tem: ${data.accounts.map((item) => item.name).join(", ") || "nenhuma conta ainda"}.`;
-      const balance = accountBalance(account, data.transactions, today);
+      const parts = balanceParts(account, data.transactions, today);
       return [
         `Relatório da conta ${account.name}`,
         "",
-        `Disponível agora: ${formatBRL(balance)}.`,
-        "Esse saldo parte do valor inicial e só muda com o que já foi recebido, pago, transferido ou usado para quitar fatura.",
+        `Lançado em ${formatDateBR(openingOn(account))} com ${formatBRL(parts.initialCents)}.`,
+        `Já entrou: ${formatBRL(parts.inCents)}.`,
+        `Já saiu: ${formatBRL(parts.outCents)}.`,
+        `Agora: ${formatBRL(parts.balanceCents)}.`,
         "",
-        "A tela Contas mostra esta conta junto com as outras, já com o saldo de hoje.",
+        "O que ainda vai entrar ou sair não muda esse número. A visão geral usa a mesma conta.",
       ].join("\n");
     }
-    const balance = totalBalance(data.accounts, data.transactions, today);
-    const lines = data.accounts.filter((item) => !item.archived).map((item) => `${item.name}: ${formatBRL(accountBalance(item, data.transactions, today))}`);
+    const ledger = ledgerTotals(data.accounts, data.transactions, today);
+    const lines = data.accounts.map((item) => {
+      const parts = balanceParts(item, data.transactions, today);
+      return `${item.name}: lançado em ${formatDateBR(openingOn(item))} com ${formatBRL(parts.initialCents)}, entrou ${formatBRL(parts.inCents)}, saiu ${formatBRL(parts.outCents)}, agora ${formatBRL(parts.balanceCents)}.`;
+    });
     return [
       "Relatório de saldo",
       "",
-      `Disponível hoje, somando as contas: ${formatBRL(balance)}.`,
+      `${formatBRL(ledger.initialCents)} lançado nas contas`,
+      `+ ${formatBRL(ledger.inCents)} que entrou depois`,
+      `− ${formatBRL(ledger.outCents)} que saiu`,
+      `= ${formatBRL(ledger.balanceCents)} agora`,
       lines.length ? lines.join("\n") : "Ainda não há conta cadastrada.",
       "",
-      "Receita que ainda vai entrar e conta que ainda vai pagar não entram nesse número.",
+      "O que ainda vai entrar ou sair fica fora deste número.",
     ].join("\n");
   }
 
   if (metric === "month_overview") {
     const month = query.month && /^\d{4}-\d{2}$/.test(query.month) ? query.month : monthKey(today);
     const dashboard = buildDashboard(data, month, today);
+    const ledger = ledgerTotals(data.accounts, data.transactions, today);
+    const movement = categoryMovement(data, month);
+    const still = movement.pending.reduce((sum, item) => sum + item.totalCents, 0);
     return [
       `Relatório de ${formatMonthLabel(month)}`,
+      "",
+      `${formatBRL(ledger.initialCents)} lançado nas contas`,
+      `+ ${formatBRL(ledger.inCents)} que entrou depois`,
+      `− ${formatBRL(ledger.outCents)} que saiu`,
+      `= ${formatBRL(ledger.balanceCents)} agora`,
+      ...movement.pending.map((item) => `− ${item.name} ${formatBRL(item.totalCents)} ainda vai sair${item.date ? ` em ${formatDateBR(item.date)}` : ""}`),
+      `= ${formatBRL(ledger.balanceCents - still)} depois do que ainda sai em ${formatMonthLabel(month)}`,
       "",
       `Já recebi: ${formatBRL(dashboard.incomeCents)}.`,
       `Ainda vai entrar neste mês: ${formatBRL(Math.max(0, dashboard.incomeExpectedCents - dashboard.incomeCents))}.`,
@@ -221,19 +239,17 @@ function withPoints(title: string, kind: "pie" | "bars", points: Array<{ name: s
 export function chartForQuery(query: QueryDraft, data: FinanceData, today: string, text: string): AssistantChart | null {
   const metric = query.metric || "available_balance";
   if (metric === "available_balance" || metric === "account_balance") {
-    const accounts = data.accounts.filter((account) => !account.archived);
-    return withPoints("Saldo por conta", "pie", accounts.map((account) => ({
+    return withPoints("Saldo por conta", "pie", data.accounts.map((account) => ({
       name: account.name,
       totalCents: Math.max(0, accountBalance(account, data.transactions, today)),
     })));
   }
   if (metric === "month_overview") {
     const month = query.month && /^\d{4}-\d{2}$/.test(query.month) ? query.month : monthKey(today);
-    const dashboard = buildDashboard(data, month, today);
-    return withPoints(`Como está ${formatMonthLabel(month)}`, "pie", [
-      { name: "Já recebi", totalCents: dashboard.incomeCents },
-      { name: "Já paguei", totalCents: dashboard.spendingCents },
-      { name: "Ainda vou pagar", totalCents: dashboard.pendingCents },
+    const movement = categoryMovement(data, month);
+    return withPoints(`Categorias de ${formatMonthLabel(month)}`, "pie", [
+      ...movement.paid.map((item) => ({ name: `${item.name} · já saiu${item.date ? ` · ${formatDateBR(item.date)}` : ""}`, totalCents: item.totalCents })),
+      ...movement.pending.map((item) => ({ name: `${item.name} · a pagar${item.date ? ` · ${formatDateBR(item.date)}` : ""}`, totalCents: item.totalCents })),
     ]);
   }
   if (metric === "forecast") {

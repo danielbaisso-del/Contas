@@ -1,12 +1,13 @@
 import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantPlace, type AssistantResponse, type InterviewState, type TransactionDraft } from "@/domain/assistant";
 import { groundLaunch, groundTransfer, type GroundLaunch, type UnderstoodDraft } from "@/domain/ground";
-import { conductInterview, continuesInterview, explicitDate, inferEntry, readAmountCents } from "@/domain/interview";
+import { conductInterview, continuesInterview, explicitDate, inferEntry, readAmountCents, rememberedText } from "@/domain/interview";
 import { resolveAmountCents, suggestCategory } from "@/domain/resolveText";
-import { buildDashboard } from "@/finance/engine";
+import { accountBalance, balanceParts, buildDashboard, categoryMovement, ledgerTotals, openingOn } from "@/finance/engine";
 import { planBankInstallments, planCardInstallments, installmentsForDatabase } from "@/finance/installments";
 import { formatDateBR, monthKey, todayISO } from "@/lib/dates";
 import { accountTypeLabel, COLORS } from "@/lib/labels";
 import { formatBRL, parseMoneyToCents } from "@/lib/money";
+import { isTrashed, isTrashedAccount } from "@/lib/trash";
 import { matchByName, normalizeText } from "@/lib/utils";
 import { mapAccount, mapCard, mapCategory, mapInvoice, mapRecurrence, mapTransaction } from "@/services/mappers";
 import type { FinanceData } from "@/types/models";
@@ -16,9 +17,10 @@ import { geminiJson, parseModelJson } from "./gemini";
 import { HttpError, readJson, sendJson, type NodeRequest, type NodeResponse } from "./http";
 import { consumeAiQuota, requireUser, userClient } from "./supabase";
 
-const SYSTEM = `Você é a conversa do aplicativo Contas. Entenda qualquer frase em português, como uma IA normal, e devolva somente JSON.
-Não calcule saldo, não invente valor e não escreva SQL. amount_cents só se a pessoa falou o número: R$ 85 vira 8500.
-message é uma frase curta do que você entendeu, sem valor em reais e sem dizer que já salvou.
+const SYSTEM = `Você é a conversa do aplicativo Contas. Fale como uma IA que entende português, datas, valores e o que a pessoa já disse. Devolva somente JSON.
+Os números do contexto são os dados gravados. Use só esses centavos. Não invente saldo e não escreva SQL.
+Quando a pessoa informar valor, data, conta ou categoria para lançar, preencha o draft. O aplicativo é quem guarda. amount_cents só se ela falou o número: R$ 85 vira 8500.
+message é uma frase curta do que você entendeu, sem dizer que já salvou.
 Se a pessoa quer gravar receita, despesa, conta a pagar ou compra, use create_transaction e preencha description, type, status, category_name, account_name e card_name com as palavras dela.
 Recebi = income received. Paguei, gastei ou comprei = expense paid. Devo, falta pagar ou conta a pagar = expense pending.
 Transferência entre contas = create_transfer. Pergunta sobre os números dela = query, sem responder o número.
@@ -42,7 +44,7 @@ function forcedQuery(text: string) {
 }
 
 function wantsNewAccount(text: string): boolean {
-  return /\b(cadastrar uma conta|nova conta|criar uma conta|criar conta)\b/.test(normalizeText(text));
+  return /\b(cadastrar uma conta|nova conta|criar uma conta|criar conta|crie a conta|cria a conta|cadastra a conta)\b/.test(normalizeText(text));
 }
 
 function inferInstallments(text: string): number | null {
@@ -73,10 +75,10 @@ async function loadData(token: string): Promise<FinanceData> {
   }));
   const [accounts, categories, cards, transactions, recurrences, invoices] = result;
   return {
-    accounts: accounts.map(mapAccount),
+    accounts: accounts.map(mapAccount).filter((account) => !isTrashedAccount(account)),
     categories: categories.map(mapCategory),
     cards: cards.map(mapCard),
-    transactions: transactions.map(mapTransaction),
+    transactions: transactions.map(mapTransaction).filter((item) => !isTrashed(item.notes)),
     recurrences: recurrences.map(mapRecurrence),
     invoices: invoices.map(mapInvoice),
     goals: [],
@@ -369,6 +371,7 @@ function readInterview(value: unknown): InterviewState | null {
     accountId: typeof row.accountId === "string" ? row.accountId : null,
     installments: typeof row.installments === "number" && row.installments >= 2 && row.installments <= 48 ? Math.round(row.installments) : null,
     fixed: row.fixed === true,
+    pendingAccountName: typeof row.pendingAccountName === "string" && row.pendingAccountName.trim().length >= 2 ? row.pendingAccountName.trim().slice(0, 40) : null,
   };
 }
 
@@ -397,6 +400,47 @@ async function saveInterview(token: string, userId: string, state: InterviewStat
     : state.kind === "paid"
       ? (occurred > today ? "planned" as const : "paid" as const)
       : (occurred > today ? "planned" as const : "pending" as const);
+  let accountId = state.accountId;
+  let createdAccount = "";
+  const chosen = accountId ? data.accounts.find((account) => account.id === accountId) : null;
+  if (chosen?.archived) {
+    const client = userClient(token);
+    const reactivated = await client.from("accounts").update({ archived: false }).eq("id", chosen.id);
+    if (reactivated.error) throw new HttpError(400, "Não consegui reativar a conta.");
+    chosen.archived = false;
+    createdAccount = `Reativei a conta ${chosen.name}.`;
+  }
+  if (!accountId && state.pendingAccountName) {
+    const name = state.pendingAccountName.trim().slice(0, 80);
+    const existing = data.accounts.find((account) => !account.archived && normalizeText(account.name) === normalizeText(name));
+    if (existing) accountId = existing.id;
+    else {
+      const client = userClient(token);
+      const accountType = inferAccountType(name);
+      const color = COLORS[data.accounts.length % COLORS.length] ?? COLORS[0];
+      const inserted = await client.from("accounts").insert({
+        user_id: userId,
+        name,
+        institution: name,
+        type: accountType,
+        initial_balance_cents: 0,
+        color,
+      }).select("id").single();
+      if (inserted.error || !inserted.data) throw new HttpError(400, "Não consegui criar a conta.");
+      accountId = String(inserted.data.id);
+      createdAccount = `Criei a conta ${name} com saldo inicial zero.`;
+      data.accounts.push({
+        id: accountId,
+        name,
+        institution: name,
+        type: accountType,
+        initialBalanceCents: 0,
+        color,
+        archived: false,
+        createdAt: "",
+      });
+    }
+  }
   const matched = suggestCategory(state.description ?? "", data.categories, type, state.description);
   const category = matched ?? (state.description ? await ensureCategory(token, userId, state.description, type, data.categories.length) : null);
   const categoryLine = matched ? `Categoria: ${matched.name}.` : category ? `Criei a categoria ${category.name}.` : "";
@@ -411,32 +455,35 @@ async function saveInterview(token: string, userId: string, state: InterviewStat
     due_on: state.kind === "upcoming" ? occurred : null,
     status,
     category_id: category?.id ?? null,
-    account_id: state.accountId,
+    account_id: accountId,
     card_id: null,
     payment_method: null,
     notes: null,
     installments: state.installments ?? 1,
   };
-  if (state.fixed && type === "expense" && state.accountId) {
+  if (state.fixed && type === "expense" && accountId) {
     await saveFixedBill(token, userId, draft);
     return {
-      reply: `Conta fixa salva: ${formatBRL(draft.amount_cents)} de ${draft.description}, todo dia ${occurred.slice(8, 10)}, na conta ${data.accounts.find((item) => item.id === state.accountId)?.name ?? "escolhida"}. ${categoryLine} Ela entra em todos os meses a partir de ${formatDateBR(occurred)}.`,
+      reply: `${createdAccount} Conta fixa salva: ${formatBRL(draft.amount_cents)} de ${draft.description}, todo dia ${occurred.slice(8, 10)}, na conta ${data.accounts.find((item) => item.id === accountId)?.name ?? "escolhida"}. ${categoryLine} Ela entra em todos os meses a partir de ${formatDateBR(occurred)}.`.trim(),
       place: { label: "Ver as contas fixas", to: "/compromissos" },
     };
   }
   await confirmDraft(token, { kind: (draft.installments ?? 1) > 1 ? "bank_installments" : "transaction", draft }, data);
-  const account = data.accounts.find((item) => item.id === state.accountId);
+  const account = data.accounts.find((item) => item.id === accountId);
   const where = account?.name ?? "a conta";
   const when = formatDateBR(occurred);
+  const before = account ? accountBalance(account, data.transactions, today) : 0;
+  const delta = status === "received" && occurred <= today ? draft.amount_cents : status === "paid" && occurred <= today ? -draft.amount_cents : 0;
+  const balanceLine = account && delta !== 0 ? `${where} estava com ${formatBRL(before)} e agora fica com ${formatBRL(before + delta)}.` : "";
   const effect = (draft.installments ?? 1) > 1
     ? `Dividi em ${draft.installments} parcelas, uma em cada mês a partir de ${when}.`
     : state.kind === "income"
-    ? (status === "received" ? "Esse valor entra no saldo e na parte verde do gráfico." : "A data é futura, então ele fica previsto e ainda não entra no saldo de hoje.")
+    ? (status === "received" ? `Esse valor soma no saldo. ${balanceLine}` : "A data é futura, então ele fica previsto e ainda não entra no saldo de hoje.")
     : state.kind === "paid"
-      ? (status === "paid" ? "Esse valor sai do saldo e entra na parte vermelha do gráfico." : "A data é futura, então ele fica previsto.")
+      ? (status === "paid" ? `Esse valor subtrai do saldo. ${balanceLine}` : "A data é futura, então ele fica previsto.")
       : "O dinheiro ainda não saiu. Ele fica na parte amarela, como conta a pagar.";
   return {
-    reply: `${state.kind === "income" ? "Receita salva" : state.kind === "paid" ? "Gasto salvo" : "Conta futura salva"}: ${formatBRL(state.amountCents ?? 0)} de ${state.description}, em ${when}, na conta ${where}. ${categoryLine} ${effect}\nSe algum detalhe ficou errado, diga: muda o valor para 200. Quer anotar outro? Se acabou, diga: só isso.`,
+    reply: `${createdAccount} ${state.kind === "income" ? "Receita salva" : state.kind === "paid" ? "Gasto salvo" : "Conta futura salva"}: ${formatBRL(state.amountCents ?? 0)} de ${state.description}, em ${when}, na conta ${where}. ${categoryLine} ${effect}\nSe algum detalhe ficou errado, diga: muda o valor para 200. Quer anotar outro? Se acabou, diga: só isso.`.replace(/\s+/g, " ").trim(),
     place: chartPlace(occurred.slice(0, 7)),
   };
 }
@@ -632,12 +679,16 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       return;
     }
     const interview = readInterview(body.interview);
-    if (guide === "account" || wantsNewAccount(text)) {
-      const earlier = Array.isArray(body.history) ? body.history.filter((item) => (item as { role?: string }).role === "user").map((item) => String((item as { content?: string }).content ?? "")).join(" ") : "";
-      sendJson(res, 200, buildAccount(text, data, earlier));
+    const context = rememberedText(body.history);
+    const followUp = /\b(ja falei|eu ja disse|como eu disse|crie a conta|cria a conta|o valor|pode lancar|pode salvar)\b/.test(normalizeText(text))
+      || (/^\d/.test(text.trim()) && text.trim().length <= 20)
+      || (explicitDate(text, today) != null && text.trim().length <= 24);
+    const spoken = inferEntry(text) ?? ((interview || followUp) && !isQuestion(text) ? inferEntry(context) : null);
+    const launching = spoken != null && (readAmountCents(text) != null || readAmountCents(context) != null || interview?.amountCents != null);
+    if ((guide === "account" || wantsNewAccount(text)) && !launching) {
+      sendJson(res, 200, buildAccount(text, data, context));
       return;
     }
-    const spoken = inferEntry(text);
     const aboutCard = /cart[aã]o|fatura/.test(normalizeText(text));
     const cardPurchase = aboutCard && (spoken === "paid" || readAmountCents(text) != null);
     const continuing = interview != null && continuesInterview(text, interview, data, today);
@@ -661,7 +712,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
           return;
         }
       }
-      const result = conductInterview(entryKind, text, interviewNow, data, today);
+      const result = conductInterview(entryKind, text, interviewNow, data, today, context);
       if (!result.ready || result.state.amountCents == null || !result.state.occurredOn || !result.state.description || !result.state.accountId) {
         sendJson(res, 200, { reply: result.question ?? "Me diga o próximo detalhe.", interview: result.state, confirmation: null });
         return;
@@ -707,8 +758,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
         payment: /cart[aã]o|cr[eé]dito/i.test(text) ? "credit" as const : "cash" as const,
         months: /tr[eê]s meses/i.test(text) ? 3 : /dois meses/i.test(text) ? 2 : 1,
       };
-      const reminder = guide === "income" || guide === "paid" || guide === "upcoming" ? conductInterview(guide, "", interview, data, today).question : null;
-      sendJson(res, 200, { reply: `${answerQuery(query, data, today, text)}${reminder ? `\n\nPara continuar o lançamento: ${reminder}` : ""}`, chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), interview, confirmation: null });
+      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), interview, confirmation: null });
       return;
     }
     const normalized = normalizeText(text);
@@ -721,15 +771,23 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       return;
     }
     await consumeAiQuota(user.id);
-    const context = {
+    const ledger = ledgerTotals(data.accounts, data.transactions, today);
+    const movement = categoryMovement(data, monthKey(today));
+    const facts = {
       hoje: today,
-      contas: data.accounts.filter((account) => !account.archived).map((account) => account.name),
+      centavos: { comecou: ledger.initialCents, entrou: ledger.inCents, saiu: ledger.outCents, saldo_agora: ledger.balanceCents },
+      contas: data.accounts.map((account) => {
+        const parts = balanceParts(account, data.transactions, today);
+        return { nome: account.name, arquivada: account.archived, lancado_em: openingOn(account), comecou: parts.initialCents, entrou: parts.inCents, saiu: parts.outCents, agora: parts.balanceCents };
+      }),
+      categorias_que_ja_sairam_no_mes: movement.paid.map((item) => ({ nome: item.name, centavos: item.totalCents })),
+      categorias_que_ainda_vao_sair_no_mes: movement.pending.map((item) => ({ nome: item.name, centavos: item.totalCents })),
       cartoes: data.cards.filter((card) => !card.archived).map((card) => card.name),
       categorias: data.categories.map((category) => `${category.name} (${category.kind === "income" ? "receita" : "despesa"})`),
     };
     let intent: Awaited<ReturnType<typeof interpretIntent>>;
     try {
-      intent = await interpretIntent(`Contexto do sistema desta pessoa:\n${JSON.stringify(context)}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
+      intent = await interpretIntent(`Contexto do sistema desta pessoa:\n${JSON.stringify(facts)}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
     } catch (error) {
       if (error instanceof HttpError && (error.status === 429 || error.status === 503)) throw error;
       sendJson(res, 200, {

@@ -1,5 +1,6 @@
 import { planBankInstallments, planCardInstallments, installmentsForDatabase } from "@/finance/installments";
 import { DEFAULT_CATEGORIES } from "@/domain/defaults";
+import { isTrashed, isTrashedAccount, restoreNotes, trashAccountName, trashNotes, visibleAccountName } from "@/lib/trash";
 import { friendlyDbError } from "@/lib/utils";
 import { todayISO } from "@/lib/dates";
 import {
@@ -16,11 +17,13 @@ import {
 import { requireUserId } from "@/services/session";
 import { supabase } from "@/services/supabase";
 import type {
+  Account,
   AccountType,
   CategoryKind,
   FinanceData,
   Profile,
   RecurrenceFrequency,
+  Transaction,
   TransactionStatus,
   TransactionType,
 } from "@/types/models";
@@ -61,12 +64,12 @@ async function ensureStarter(userId: string, categories: number): Promise<void> 
   }
 }
 
-export async function loadWorkspace(userId: string): Promise<{ data: FinanceData; profile: Profile | null }> {
+export async function loadWorkspace(userId: string): Promise<{ data: FinanceData; profile: Profile | null; trash: { accounts: Account[]; transactions: Transaction[] } }> {
   const categoryProbe = await supabase.from("categories").select("id", { count: "exact", head: true }).eq("user_id", userId);
   if (categoryProbe.error) throw new Error(friendlyDbError(categoryProbe.error));
   await ensureStarter(userId, categoryProbe.count ?? 0);
 
-  const [accounts, categories, cards, transactions, recurrences, invoices, goals, contributions, profileRow] = await Promise.all([
+  const [accountRows, categories, cards, transactionRows, recurrences, invoices, goals, contributions, profileRow] = await Promise.all([
     readAll("accounts", "name"),
     readAll("categories", "name"),
     readAll("credit_cards", "name"),
@@ -79,13 +82,19 @@ export async function loadWorkspace(userId: string): Promise<{ data: FinanceData
   ]);
   if (profileRow.error) throw new Error(friendlyDbError(profileRow.error));
 
+  const accounts = accountRows.map(mapAccount);
+  const transactions = transactionRows.map(mapTransaction);
   return {
     profile: profileRow.data ? mapProfile(profileRow.data as Row) : null,
+    trash: {
+      accounts: accounts.filter(isTrashedAccount),
+      transactions: transactions.filter((item) => isTrashed(item.notes)),
+    },
     data: {
-      accounts: accounts.map(mapAccount),
+      accounts: accounts.filter((account) => !isTrashedAccount(account)),
       categories: categories.map(mapCategory),
       cards: cards.map(mapCard),
-      transactions: transactions.map(mapTransaction),
+      transactions: transactions.filter((item) => !isTrashed(item.notes)),
       recurrences: recurrences.map(mapRecurrence),
       invoices: invoices.map(mapInvoice),
       goals: goals.map(mapGoal),
@@ -170,10 +179,30 @@ export async function deleteTransaction(id: string): Promise<void> {
   if (error) throw new Error(friendlyDbError(error));
 }
 
-export async function deleteInstallmentGroup(groupId: string): Promise<void> {
+export async function moveToTrash(id: string, notes: string | null): Promise<void> {
   await requireUserId();
-  const { error } = await supabase.from("transactions").delete().eq("installment_group_id", groupId).neq("type", "invoice_payment");
+  const { error } = await supabase.from("transactions").update({ notes: trashNotes(notes) }).eq("id", id);
   if (error) throw new Error(friendlyDbError(error));
+}
+
+export async function moveGroupToTrash(groupId: string): Promise<void> {
+  await requireUserId();
+  const { data, error } = await supabase.from("transactions").select("id, notes").eq("installment_group_id", groupId);
+  if (error) throw new Error(friendlyDbError(error));
+  for (const row of data ?? []) {
+    const { error: updateError } = await supabase.from("transactions").update({ notes: trashNotes(row.notes == null ? null : String(row.notes)) }).eq("id", row.id);
+    if (updateError) throw new Error(friendlyDbError(updateError));
+  }
+}
+
+export async function restoreTransaction(id: string, notes: string | null): Promise<void> {
+  await requireUserId();
+  const { error } = await supabase.from("transactions").update({ notes: restoreNotes(notes) }).eq("id", id);
+  if (error) throw new Error(friendlyDbError(error));
+}
+
+export async function deleteInstallmentGroup(groupId: string): Promise<void> {
+  await moveGroupToTrash(groupId);
 }
 
 export async function createBankInstallments(input: {
@@ -275,9 +304,20 @@ export async function setAccountArchived(id: string, archived: boolean): Promise
   if (error) throw new Error(friendlyDbError(error));
 }
 
-export async function deleteAccount(id: string): Promise<void> {
+export async function deleteAccount(id: string): Promise<"deleted" | "trashed"> {
   await requireUserId();
   const { error } = await supabase.from("accounts").delete().eq("id", id);
+  if (!error) return "deleted";
+  const current = await supabase.from("accounts").select("name").eq("id", id).maybeSingle();
+  const name = visibleAccountName(String(current.data?.name ?? "Conta"));
+  const archived = await supabase.from("accounts").update({ archived: true, name: trashAccountName(name) }).eq("id", id);
+  if (archived.error) throw new Error(friendlyDbError(error));
+  return "trashed";
+}
+
+export async function restoreAccount(id: string, name: string): Promise<void> {
+  await requireUserId();
+  const { error } = await supabase.from("accounts").update({ archived: false, name: visibleAccountName(name) }).eq("id", id);
   if (error) throw new Error(friendlyDbError(error));
 }
 
@@ -390,13 +430,13 @@ export async function saveRecurrence(input: RecurrenceInput, id?: string): Promi
 export async function setRecurrenceStatus(id: string, status: "active" | "paused" | "cancelled"): Promise<void> {
   await requireUserId();
   if (status === "cancelled") {
-    const { error: deleteError } = await supabase
-      .from("transactions")
-      .delete()
-      .eq("recurrence_id", id)
-      .in("status", ["planned", "pending"])
-      .gte("occurred_on", todayISO());
-    if (deleteError) throw new Error(friendlyDbError(deleteError));
+    const today = todayISO();
+    const pending = await supabase.from("transactions").select("id, notes").eq("recurrence_id", id).in("status", ["planned", "pending"]).gte("occurred_on", today);
+    if (pending.error) throw new Error(friendlyDbError(pending.error));
+    for (const row of pending.data ?? []) {
+      const { error: updateError } = await supabase.from("transactions").update({ notes: trashNotes(row.notes == null ? null : String(row.notes)) }).eq("id", row.id);
+      if (updateError) throw new Error(friendlyDbError(updateError));
+    }
   }
   const { error } = await supabase.from("recurrences").update({ status }).eq("id", id);
   if (error) throw new Error(friendlyDbError(error));

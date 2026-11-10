@@ -45,20 +45,53 @@ export function explicitDate(text: string, today: string): string | null {
   return resolved.assumed ? null : resolved.date;
 }
 
-function sourceText(text: string, accounts: Account[]): string {
+export function accountPhrase(text: string): string | null {
+  const withoutFixed = text.replace(/\bcontas?\s+fixas?\b/gi, " ");
+  const match = withoutFixed.match(/\bcontas?\s+(?:do|da|de|no|na|o|a)?\s*([A-Za-zÀ-ú0-9][^,.;\n]{1,40})/i);
+  if (!match?.[1]) return null;
+  const name = match[1]
+    .split(/\b(?:recebi|receber|recebido|hoje|ontem|amanh[aã]|reais|real|saldo|lance|lan[cç]ar|lanca|valor|que|falei|gastei|paguei|comprei|entrou|ganhei)\b/i)[0]
+    ?.replace(/\b(do|da|de|no|na|o|a|e|com)$/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+\d{1,7}(?:[.,]\d{1,2})?$/, "")
+    .trim() ?? "";
+  if (name.length < 2 || /^fix[ao]\b/i.test(name)) return null;
+  return name;
+}
+
+export function rememberedText(history: unknown): string {
+  if (!Array.isArray(history)) return "";
+  return history
+    .filter((item): item is { role?: string; content?: string } => !!item && typeof item === "object")
+    .filter((item) => item.role === "user")
+    .map((item) => String(item.content ?? "").trim())
+    .filter((item) => item.length >= 2)
+    .slice(-12)
+    .join("\n");
+}
+
+function sourceText(text: string, accounts: Account[], extraNames: string[] = []): string {
   let cleaned = text;
-  for (const account of accounts) {
-    if (account.name.trim().length >= 2) cleaned = cleaned.replace(new RegExp(account.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig"), " ");
+  for (const name of [...accounts.map((account) => account.name), ...extraNames]) {
+    if (name.trim().length >= 2) cleaned = cleaned.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig"), " ");
   }
   return cleaned
     .replace(/R\$\s*[\d.]+(?:,\d{1,2})?/gi, " ")
     .replace(/\b\d{1,2}[/\-.]\d{1,2}(?:[/\-.]\d{2,4})?\b/g, " ")
     .replace(/\b(hoje|ontem|amanh[aã]|dia)\s*\d{0,2}\b/gi, " ")
     .replace(/\b\d{1,7}(?:[.,]\d{1,2})?\b/g, " ")
-    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|devo|devendo|tenho|falta|quero|lancar|lan[cç]ar|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s|todo|todos|fixa|fixo|parcela|parcelas|parcelada|parcelado|vezes)\b/gi, " ")
+    .replace(/\b(recebi|receber|recebido|receita|entrou|ganhei|gastei|gasto|despesa|paguei|pago|pagar|comprei|compra|vou|ainda|vai|devo|devendo|tenho|falta|quero|lancar|lan[cç]ar|lanca|crie|cria|criar|cadastra|ja|já|falei|disse|de|do|da|no|na|em|para|pra|pro|o|a|os|as|um|uma|meu|minha|reais|real|conta|banco|valor|que|foi|foram|esse|essa|neste|nessa|mes|m[eê]s|todo|todos|fixa|fixo|parcela|parcelas|parcelada|parcelado|vezes)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
+}
+
+function usableDescription(text: string, accounts: Account[], extraNames: string[]): string | null {
+  const source = sourceText(text, accounts, extraNames);
+  if (source.length < 2) return null;
+  const normalized = normalizeText(source);
+  if (/^(ja falei|valor|conta|mercado pago)$/.test(normalized)) return null;
+  return source.charAt(0).toUpperCase() + source.slice(1);
 }
 
 export function continuesInterview(text: string, current: InterviewState, data: FinanceData, today: string): boolean {
@@ -66,10 +99,13 @@ export function continuesInterview(text: string, current: InterviewState, data: 
   if (text.includes("?") || /^(quanto|qual|quais|como|posso|mostra|mostre|explica|onde|me)\b/.test(normalized)) return false;
   const spoken = inferEntry(text);
   if (spoken && spoken !== current.kind) return false;
+  if (!spoken) return true;
+  if (/\b(ja falei|eu ja disse|o valor que falei|como eu disse|pode lancar|lance o valor|crie a conta|cria a conta|criar a conta)\b/.test(normalized)) return true;
   const accounts = data.accounts.filter((account) => !account.archived);
   const hasAmount = readAmountCents(text) != null;
   const hasDate = explicitDate(text, today) != null;
-  const hasAccount = matchByName(accounts, text) != null;
+  const hasAccount = matchByName(accounts, text) != null || accountPhrase(text) != null;
+  if (!current.accountId && !hasAmount && text.trim().length >= 2 && text.trim().length <= 40 && !text.includes("?")) return true;
   if (current.amountCents != null && current.description && hasAmount && !(spoken === current.kind && hasDate)) return false;
   if (current.amountCents == null && hasAmount) return true;
   if (!current.occurredOn && hasDate && !hasAmount) return true;
@@ -80,7 +116,8 @@ export function continuesInterview(text: string, current: InterviewState, data: 
 
 export function inferEntry(text: string): "income" | "paid" | "upcoming" | null {
   const normalized = normalizeText(text);
-  if (/\b(recebi|receber|entrou|ganhei|receita)\b/.test(normalized)) return "income";
+  if (/\b(recebi|receber|entrou|ganhei|receita|salario|holerite)\b/.test(normalized)) return "income";
+  if (/\b(lance|lanca|lancar)\b/.test(normalized) && /\b(salario|receita|entrada|ganho)\b/.test(normalized)) return "income";
   if (/\b(vou pagar|ainda vou|vai vencer|vence dia|vence em|conta a pagar)\b/.test(normalized)) return "upcoming";
   if (/\b(devo|devendo|tenho que pagar)\b/.test(normalized)) {
     if (/^(quanto|qual|quais|como|me)\b/.test(normalized) && readAmountCents(text) == null) return null;
@@ -104,7 +141,7 @@ function openAccounts(data: FinanceData): Account[] {
   return data.accounts.filter((account) => !account.archived);
 }
 
-export function conductInterview(kind: InterviewState["kind"], text: string, current: InterviewState | null, data: FinanceData, today: string): { state: InterviewState; question: string | null; ready: boolean } {
+export function conductInterview(kind: InterviewState["kind"], text: string, current: InterviewState | null, data: FinanceData, today: string, context = ""): { state: InterviewState; question: string | null; ready: boolean } {
   const accounts = openAccounts(data);
   const state: InterviewState = {
     kind,
@@ -114,45 +151,61 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
     accountId: current?.kind === kind ? current.accountId : null,
     installments: current?.kind === kind ? current.installments ?? null : null,
     fixed: current?.kind === kind ? current.fixed === true : false,
+    pendingAccountName: current?.kind === kind ? current.pendingAccountName ?? null : null,
   };
-  const counted = readInstallmentCount(text);
+  const counted = readInstallmentCount(text) ?? (context ? readInstallmentCount(context) : null);
   if (counted) state.installments = counted;
-  if (wantsFixedBill(text)) state.fixed = true;
+  if (wantsFixedBill(text) || (context && wantsFixedBill(context))) state.fixed = true;
   if ((state.installments ?? 1) > 1) state.fixed = false;
-  if (state.accountId && !accounts.some((account) => account.id === state.accountId)) state.accountId = null;
+  if (state.accountId && !data.accounts.some((account) => account.id === state.accountId)) state.accountId = null;
   const normalized = normalizeText(text);
   if (state.amountCents != null && /\b(muda|altera|corrige|valor)\b/.test(normalized)) {
     const replacement = readAmountCents(text);
     if (replacement) state.amountCents = replacement;
   }
-  if (state.amountCents == null) {
-    const amount = readAmountCents(text);
-    if (amount) state.amountCents = amount;
+  if (state.amountCents == null) state.amountCents = readAmountCents(text) ?? (context ? readAmountCents(context) : null);
+  if (!state.occurredOn) state.occurredOn = explicitDate(text, today) ?? (context ? explicitDate(context, today) : null);
+  const phrase = accountPhrase(text) ?? (context ? accountPhrase(context) : null);
+  const named = (phrase ? matchByName(data.accounts, phrase) : null) ?? matchByName(data.accounts, text) ?? (context ? matchByName(data.accounts, context) : null);
+  if (named) {
+    state.accountId = named.id;
+    state.pendingAccountName = null;
+  } else if (!state.accountId && phrase) state.pendingAccountName = phrase;
+  else if (!state.accountId && !phrase && accounts.length === 0 && text.trim().length >= 2 && text.trim().length <= 40 && !/\d/.test(text) && !/\b(ja falei|falei|disse|salario|salário)\b/.test(normalized)) {
+    state.pendingAccountName = text.trim();
   }
-  if (!state.occurredOn) {
-    const date = explicitDate(text, today);
-    if (date) state.occurredOn = date;
-  }
-  const named = matchByName(accounts, text);
-  if (named) state.accountId = named.id;
   if (!state.description) {
-    const source = sourceText(text, accounts);
-    if (source.length >= 2 && !accounts.some((account) => normalizeText(account.name) === normalizeText(source))) state.description = source.charAt(0).toUpperCase() + source.slice(1);
+    const description = usableDescription(text, accounts, phrase ? [phrase] : []) ?? (context ? usableDescription(context, accounts, phrase ? [phrase] : []) : null);
+    if (description && normalizeText(description) !== normalizeText(state.pendingAccountName ?? "")) state.description = description;
   }
-  if (!state.accountId && accounts.length === 1) state.accountId = accounts[0]?.id ?? null;
+  if (!state.accountId && !state.pendingAccountName && accounts.length === 1) state.accountId = accounts[0]?.id ?? null;
+  if (!state.accountId && !state.pendingAccountName && data.accounts.length === 1) state.accountId = data.accounts[0]?.id ?? null;
 
-  if (!accounts.length) {
-    return { state, ready: false, question: "Antes do valor, preciso saber onde o dinheiro está. Diga o nome da conta e quanto tem nela. Exemplo: Nubank com 1.200." };
+  if (!accounts.length && !state.accountId && !state.pendingAccountName) {
+    const archived = data.accounts.filter((account) => account.archived).map((account) => account.name);
+    return {
+      state,
+      ready: false,
+      question: archived.length
+        ? `A conta está arquivada: ${archived.join(", ")}. Diga o nome que eu reativo e continuo o lançamento.`
+        : "Não achei nenhuma conta. Diga o nome, por exemplo: conta Mercado Pago. Eu crio se ela ainda não existir e continuo o lançamento.",
+    };
   }
   if (state.amountCents == null) {
+    const chosen = state.accountId ? data.accounts.find((account) => account.id === state.accountId) : null;
+    const place = chosen
+      ? ` A conta é ${chosen.name}${chosen.archived ? ", e eu reativo ela ao salvar" : ""}.`
+      : state.pendingAccountName
+        ? ` Vou criar a conta ${state.pendingAccountName}.`
+        : "";
     return {
       state,
       ready: false,
       question: kind === "income"
-        ? "Qual valor entrou? Pode responder só o número, por exemplo 3.200."
+        ? `Qual valor entrou?${place} Pode responder só o número, por exemplo 3.200.`
         : kind === "paid"
-          ? "Qual valor saiu? Pode responder só o número, por exemplo 150."
-          : "Qual é o valor que ainda vai pagar? Pode responder só o número, por exemplo 1.800.",
+          ? `Qual valor saiu?${place} Pode responder só o número, por exemplo 150.`
+          : `Qual é o valor que ainda vai pagar?${place} Pode responder só o número, por exemplo 1.800.`,
     };
   }
   if (!state.description) {
@@ -175,13 +228,14 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
         : `Entendi: ${state.description} de ${formatBRL(state.amountCents)}.${categoryNote(state.description, data, kind)} Em que dia foi? Diga hoje, ontem ou uma data, como 05/11.`,
     };
   }
-  if (!state.accountId) {
+  if (!state.accountId && !state.pendingAccountName) {
+    const names = accounts.map((account) => account.name).join(", ") || "nenhuma conta";
     return {
       state,
       ready: false,
       question: kind === "income"
-        ? `Para qual conta foram esses ${formatBRL(state.amountCents)}? Você tem: ${accounts.map((account) => account.name).join(", ")}.`
-        : `De qual conta saiu? Você tem: ${accounts.map((account) => account.name).join(", ")}.`,
+        ? `Para qual conta foram esses ${formatBRL(state.amountCents)}? Você tem: ${names}. Se o nome não existir, eu crio.`
+        : `De qual conta saiu? Você tem: ${names}. Se o nome não existir, eu crio.`,
     };
   }
   return { state, question: null, ready: true };

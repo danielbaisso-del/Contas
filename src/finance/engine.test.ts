@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDashboard, projectCash, totalBalance } from "@/finance/engine";
+import { balanceParts, buildDashboard, monthlyHistory, projectCash, totalBalance } from "@/finance/engine";
 import { planCardInstallments } from "@/finance/installments";
 import { recurrenceDates } from "@/finance/recurrence";
 import { parseMoneyToCents, splitAmount } from "@/lib/money";
@@ -171,7 +171,7 @@ describe("saldos", () => {
     });
     expect(totalBalance(data.accounts, data.transactions, today)).toBe(100_000);
     const dashboard = buildDashboard(data, "2026-11", today);
-    expect(dashboard.incomeCents).toBe(0);
+    expect(dashboard.incomeCents).toBe(100_000);
     expect(dashboard.spendingCents).toBe(0);
     expect(dashboard.accountSnapshots).toEqual([
       { accountId: "acc-1", balanceCents: 80_000 },
@@ -205,6 +205,38 @@ describe("saldos", () => {
     const dashboard = buildDashboard(data, "2026-11", today);
     expect(dashboard.pendingCents).toBe(10_000);
     expect(dashboard.forecasts[0]?.balanceCents).toBe(130_000);
+  });
+
+  it("começa no saldo inicial, soma o recebido e subtrai o pago", () => {
+    const data = emptyData({
+      accounts: [account({ archived: true, initialBalanceCents: 300_000 })],
+      transactions: [
+        transaction({ id: "in", type: "income", amountCents: 50_000, status: "received", accountId: "acc-1" }),
+        transaction({ id: "out", type: "expense", amountCents: 20_000, status: "paid", accountId: "acc-1" }),
+        transaction({ id: "later", type: "expense", amountCents: 10_000, status: "pending", accountId: "acc-1", occurredOn: "2026-11-20" }),
+      ],
+    });
+    expect(balanceParts(data.accounts[0]!, data.transactions, today)).toEqual({
+      initialCents: 300_000,
+      inCents: 50_000,
+      outCents: 20_000,
+      balanceCents: 330_000,
+    });
+    expect(totalBalance(data.accounts, data.transactions, today)).toBe(330_000);
+    expect(projectCash(data, "2026-11-30", today)).toBe(320_000);
+  });
+
+  it("coloca entrada futura e conta pendente no gráfico do mês", () => {
+    const data = emptyData({
+      transactions: [
+        transaction({ id: "in", type: "income", amountCents: 50_000, status: "planned", occurredOn: "2026-11-20", accountId: "acc-1" }),
+        transaction({ id: "out", type: "expense", amountCents: 12_000, status: "pending", occurredOn: "2026-11-25", accountId: "acc-1" }),
+      ],
+    });
+    const point = monthlyHistory(data, "2026-11", today, 1)[0];
+    expect(point?.incomeCents).toBe(150_000);
+    expect(point?.expenseCents).toBe(12_000);
+    expect(projectCash(data, "2026-11-30", today)).toBe(100_000 + 50_000 - 12_000);
   });
 });
 

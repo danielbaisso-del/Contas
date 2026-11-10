@@ -110,6 +110,7 @@ export interface InterviewState {
   accountId: string | null;
   installments?: number | null;
   fixed?: boolean;
+  pendingAccountName?: string | null;
 }
 
 export interface AssistantResponse {

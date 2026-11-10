@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { ArrowDownCircle, ArrowUpCircle, CalendarDays, CreditCard, LayoutDashboard, LogOut, Menu, Moon, PieChart, RefreshCw, Shield, Sun, Users, X } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CalendarDays, CreditCard, LayoutDashboard, LogOut, Menu, Moon, PieChart, RefreshCw, Shield, Sun, Trash2, Users, X } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useFinance } from "@/context/FinanceContext";
 import { useTheme } from "@/context/ThemeContext";
@@ -20,6 +20,7 @@ const items = [
   { to: "/compromissos", label: "A pagar e receber", short: "Contas", icon: CalendarDays, end: false },
   { to: "/cartoes", label: "Cartões", short: "Cartões", icon: CreditCard, end: false },
   { to: "/relatorios", label: "Relatórios", short: "Gráficos", icon: PieChart, end: false },
+  { to: "/lixeira", label: "Lixeira", short: "Lixeira", icon: Trash2, end: false },
   { to: "/conjunto", label: "Juntos", short: "Juntos", icon: Users, end: false },
 ];
 

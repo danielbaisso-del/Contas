@@ -27,6 +27,7 @@ export function userClient(token: string): SupabaseClient {
   const anon = anonKey();
   if (!url || !anon) throw new HttpError(500, "Configure a URL e a chave anon do Supabase no servidor.");
   return createClient(url, anon, {
+    accessToken: async () => token,
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     global: { headers: { Authorization: `Bearer ${token}` } },
   });
