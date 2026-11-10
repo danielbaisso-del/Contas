@@ -94,24 +94,21 @@ function usableDescription(text: string, accounts: Account[], extraNames: string
   return source.charAt(0).toUpperCase() + source.slice(1);
 }
 
-export function continuesInterview(text: string, current: InterviewState, data: FinanceData, today: string): boolean {
+export function recentLines(context: string): string[] {
+  return context.split("\n").map((line) => line.trim()).filter((line) => line.length >= 2).reverse();
+}
+
+export function continuesInterview(text: string, current: InterviewState, _data: FinanceData, today: string): boolean {
   const normalized = normalizeText(text);
-  if (text.includes("?") || /^(quanto|qual|quais|como|posso|mostra|mostre|explica|onde|me)\b/.test(normalized)) return false;
+  const amount = readAmountCents(text);
+  const date = explicitDate(text, today);
+  const asking = text.includes("?") || /^(quanto|qual|quais|como|posso|mostra|mostre|explica|onde|me)\b/.test(normalized);
+  if (asking && amount == null && date == null && !matchByName(_data.accounts, text)) return false;
+  if (/\b(ja falei|eu ja disse|como eu disse|como falei|te falei|ja disse|pode lancar|lance o valor|crie a conta|cria a conta|criar a conta|isso mesmo|essa mesma)\b/.test(normalized)) return true;
   const spoken = inferEntry(text);
-  if (spoken && spoken !== current.kind) return false;
-  if (!spoken) return true;
-  if (/\b(ja falei|eu ja disse|o valor que falei|como eu disse|pode lancar|lance o valor|crie a conta|cria a conta|criar a conta)\b/.test(normalized)) return true;
-  const accounts = data.accounts.filter((account) => !account.archived);
-  const hasAmount = readAmountCents(text) != null;
-  const hasDate = explicitDate(text, today) != null;
-  const hasAccount = matchByName(accounts, text) != null || accountPhrase(text) != null;
-  if (!current.accountId && !hasAmount && text.trim().length >= 2 && text.trim().length <= 40 && !text.includes("?")) return true;
-  if (current.amountCents != null && current.description && hasAmount && !(spoken === current.kind && hasDate)) return false;
-  if (current.amountCents == null && hasAmount) return true;
-  if (!current.occurredOn && hasDate && !hasAmount) return true;
-  if (!current.accountId && hasAccount && !hasAmount) return true;
-  if (!current.description && !hasAmount && text.trim().length >= 2 && text.trim().length <= 60) return true;
-  return spoken === current.kind && (hasAmount || hasDate || hasAccount);
+  if (spoken && spoken !== current.kind && amount != null) return false;
+  if (amount != null && current.amountCents != null && amount !== current.amountCents && text.trim().length > 18 && !/\b(muda|altera|corrige|nao|errei|troca)\b/.test(normalized)) return false;
+  return true;
 }
 
 export function inferEntry(text: string): "income" | "paid" | "upcoming" | null {
@@ -126,7 +123,15 @@ export function inferEntry(text: string): "income" | "paid" | "upcoming" | null 
     if (rest.length >= 3) return "upcoming";
     return null;
   }
-  if (/\b(paguei|gastei|comprei|despesa)\b/.test(normalized)) return "paid";
+  if (/\b(paguei|gastei|comprei|despesa|gasto)\b/.test(normalized)) return "paid";
+  if (/^(receita|entrada|ganho)$/.test(normalized) || /\b(e|eh) (uma )?(receita|entrada)\b/.test(normalized)) return "income";
+  if (/^(despesa|gasto|saida)$/.test(normalized) || /\b(e|eh) (uma )?(despesa|gasto)\b/.test(normalized)) return "paid";
+  if (/^(a pagar|conta a pagar)$/.test(normalized)) return "upcoming";
+  if (/\b(anota|anotar|anote|registra|registrar|coloca|colocar|adiciona|adicionar|lanca|lancar|lance)\b/.test(normalized)) {
+    if (/\b(recebi|receber|receita|salario|entrada|ganho|ganhei)\b/.test(normalized)) return "income";
+    if (/\b(devo|vencer|vence|a pagar|boleto)\b/.test(normalized)) return "upcoming";
+    if (readAmountCents(text) != null) return "paid";
+  }
   if (wantsFixedBill(text) || readInstallmentCount(text) != null) return readAmountCents(text) == null && /^(quanto|qual|quais)\b/.test(normalized) ? null : "upcoming";
   return null;
 }
@@ -163,10 +168,13 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
     const replacement = readAmountCents(text);
     if (replacement) state.amountCents = replacement;
   }
-  if (state.amountCents == null) state.amountCents = readAmountCents(text) ?? (context ? readAmountCents(context) : null);
-  if (!state.occurredOn) state.occurredOn = explicitDate(text, today) ?? (context ? explicitDate(context, today) : null);
-  const phrase = accountPhrase(text) ?? (context ? accountPhrase(context) : null);
-  const named = (phrase ? matchByName(data.accounts, phrase) : null) ?? matchByName(data.accounts, text) ?? (context ? matchByName(data.accounts, context) : null);
+  const remembered = context ? recentLines(context) : [];
+  const spokenNow = inferEntry(text);
+  if (spokenNow && readAmountCents(text) == null) state.kind = spokenNow;
+  if (state.amountCents == null) state.amountCents = readAmountCents(text) ?? remembered.map(readAmountCents).find((value) => value != null) ?? null;
+  if (!state.occurredOn) state.occurredOn = explicitDate(text, today) ?? remembered.map((line) => explicitDate(line, today)).find((value) => value != null) ?? null;
+  const phrase = accountPhrase(text) ?? remembered.map((line) => accountPhrase(line)).find((value) => value != null) ?? null;
+  const named = (phrase ? matchByName(data.accounts, phrase) : null) ?? matchByName(data.accounts, text) ?? remembered.map((line) => matchByName(data.accounts, line)).find((value) => value != null) ?? null;
   if (named) {
     state.accountId = named.id;
     state.pendingAccountName = null;
@@ -174,9 +182,19 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
   else if (!state.accountId && !phrase && accounts.length === 0 && text.trim().length >= 2 && text.trim().length <= 40 && !/\d/.test(text) && !/\b(ja falei|falei|disse|salario|salário)\b/.test(normalized)) {
     state.pendingAccountName = text.trim();
   }
+  const kindOnly = spokenNow != null && readAmountCents(text) == null && explicitDate(text, today) == null && text.trim().length <= 32;
   if (!state.description) {
-    const description = usableDescription(text, accounts, phrase ? [phrase] : []) ?? (context ? usableDescription(context, accounts, phrase ? [phrase] : []) : null);
-    if (description && normalizeText(description) !== normalizeText(state.pendingAccountName ?? "")) state.description = description;
+    const description = [text, ...remembered]
+      .map((line) => usableDescription(line, accounts, phrase ? [phrase] : []))
+      .find((value) => value && normalizeText(value) !== normalizeText(state.pendingAccountName ?? ""));
+    if (description) state.description = description;
+  }
+  if (!state.description && current?.amountCents != null && !kindOnly && readAmountCents(text) == null && explicitDate(text, today) == null) {
+    const direct = text.trim().replace(/[.!?]+$/g, "");
+    const plain = normalizeText(direct);
+    if (direct.length >= 2 && direct.length <= 60 && !/^(ja falei|isso|ok|sim|nao|pode lancar|pode salvar)$/.test(plain)) {
+      state.description = direct.charAt(0).toUpperCase() + direct.slice(1);
+    }
   }
   if (!state.accountId && !state.pendingAccountName && accounts.length === 1) state.accountId = accounts[0]?.id ?? null;
   if (!state.accountId && !state.pendingAccountName && data.accounts.length === 1) state.accountId = data.accounts[0]?.id ?? null;
@@ -198,23 +216,24 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
       : state.pendingAccountName
         ? ` Vou criar a conta ${state.pendingAccountName}.`
         : "";
+    const known = state.description ? ` Já anotei ${state.description}.` : "";
     return {
       state,
       ready: false,
-      question: kind === "income"
-        ? `Qual valor entrou?${place} Pode responder só o número, por exemplo 3.200.`
-        : kind === "paid"
-          ? `Qual valor saiu?${place} Pode responder só o número, por exemplo 150.`
-          : `Qual é o valor que ainda vai pagar?${place} Pode responder só o número, por exemplo 1.800.`,
+      question: state.kind === "income"
+        ? `Qual valor entrou?${place}${known} Pode responder só o número, por exemplo 3.200.`
+        : state.kind === "paid"
+          ? `Qual valor saiu?${place}${known} Pode responder só o número, por exemplo 150.`
+          : `Qual é o valor que ainda vai pagar?${place}${known} Pode responder só o número, por exemplo 1.800.`,
     };
   }
   if (!state.description) {
     return {
       state,
       ready: false,
-      question: kind === "income"
+      question: state.kind === "income"
         ? `Anotei ${formatBRL(state.amountCents)}. De onde veio esse dinheiro? Por exemplo: salário, cliente ou venda.`
-        : kind === "paid"
+        : state.kind === "paid"
           ? `Anotei ${formatBRL(state.amountCents)}. O que foi esse gasto? Por exemplo: mercado, aluguel ou internet.`
           : `Anotei ${formatBRL(state.amountCents)}. Qual é essa conta? Por exemplo: aluguel, luz ou escola.`,
     };
@@ -223,9 +242,9 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
     return {
       state,
       ready: false,
-      question: kind === "upcoming"
-        ? `Entendi: ${state.description} de ${formatBRL(state.amountCents)}.${categoryNote(state.description, data, kind)} Em que dia vence? Diga o dia, como 10 ou 10/11.`
-        : `Entendi: ${state.description} de ${formatBRL(state.amountCents)}.${categoryNote(state.description, data, kind)} Em que dia foi? Diga hoje, ontem ou uma data, como 05/11.`,
+      question: state.kind === "upcoming"
+        ? `Entendi: ${state.description} de ${formatBRL(state.amountCents)}.${categoryNote(state.description, data, state.kind)} Em que dia vence? Diga o dia, como 10 ou 10/11.`
+        : `Entendi: ${state.description} de ${formatBRL(state.amountCents)}.${categoryNote(state.description, data, state.kind)} Em que dia foi? Diga hoje, ontem ou uma data, como 05/11.`,
     };
   }
   if (!state.accountId && !state.pendingAccountName) {
@@ -233,7 +252,7 @@ export function conductInterview(kind: InterviewState["kind"], text: string, cur
     return {
       state,
       ready: false,
-      question: kind === "income"
+      question: state.kind === "income"
         ? `Para qual conta foram esses ${formatBRL(state.amountCents)}? Você tem: ${names}. Se o nome não existir, eu crio.`
         : `De qual conta saiu? Você tem: ${names}. Se o nome não existir, eu crio.`,
     };

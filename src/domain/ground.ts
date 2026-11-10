@@ -1,6 +1,6 @@
 import type { InterviewState } from "@/domain/assistant";
-import { explicitDate, inferEntry, readAmountCents, readInstallmentCount, wantsFixedBill } from "@/domain/interview";
-import { suggestCategory } from "@/domain/resolveText";
+import { explicitDate, inferEntry, readAmountCents, readInstallmentCount, recentLines, wantsFixedBill } from "@/domain/interview";
+import { resolveAmountCents, suggestCategory } from "@/domain/resolveText";
 import { formatBRL } from "@/lib/money";
 import { matchByName, normalizeText } from "@/lib/utils";
 import type { FinanceData } from "@/types/models";
@@ -14,6 +14,8 @@ export interface UnderstoodDraft {
   card_name?: string | null;
   payment_method?: string | null;
   installments?: number | null;
+  amount_cents?: number | null;
+  occurred_on?: string | null;
 }
 
 export interface LaunchDraft {
@@ -76,29 +78,42 @@ function wantsCard(text: string, draft: UnderstoodDraft | null): boolean {
   return draft?.payment_method === "credit" || Boolean(draft?.card_name?.trim()) || /cart[aã]o|fatura|cr[eé]dito/.test(normalizeText(text));
 }
 
-export function groundLaunch(text: string, data: FinanceData, today: string, understood: string, draft: UnderstoodDraft | null): GroundLaunch {
-  const kind = kindOf(text, draft);
-  const accounts = data.accounts.filter((account) => !account.archived);
+export function groundLaunch(text: string, data: FinanceData, today: string, understood: string, draft: UnderstoodDraft | null, memory?: { interview?: InterviewState | null; context?: string }): GroundLaunch {
+  const prior = memory?.interview ?? null;
+  const remembered = recentLines(memory?.context ?? "");
+  const kind = kindOf(text, draft) ?? remembered.map((line) => kindOf(line, null)).find((value) => value != null) ?? prior?.kind ?? null;
+  const accounts = data.accounts;
+  const openAccounts = accounts.filter((account) => !account.archived);
   const cards = data.cards.filter((card) => !card.archived);
   const lines: string[] = [];
-  const amount = readAmountCents(text);
-  const description = cleanName(draft?.description) ?? descriptionFromText(text, data);
-  const date = explicitDate(text, today);
+  const rememberedAmount = remembered.map((line) => readAmountCents(line)).find((value) => value != null) ?? null;
+  const amount = readAmountCents(text) ?? prior?.amountCents ?? rememberedAmount ?? resolveAmountCents(`${text}\n${memory?.context ?? ""}`, draft?.amount_cents);
+  const description = prior?.description ?? cleanName(draft?.description) ?? descriptionFromText(text, data) ?? remembered.map((line) => descriptionFromText(line, data)).find((value) => value != null) ?? null;
+  const modelDate = draft?.occurred_on && /^\d{4}-\d{2}-\d{2}$/.test(draft.occurred_on) ? draft.occurred_on : null;
+  const date = explicitDate(text, today) ?? prior?.occurredOn ?? remembered.map((line) => explicitDate(line, today)).find((value) => value != null) ?? (modelDate && modelDate !== today ? modelDate : null);
   const cardMode = wantsCard(text, draft);
-  const namedAccount = cleanName(draft?.account_name);
+  const namedAccount = cleanName(draft?.account_name) ?? prior?.pendingAccountName ?? null;
   const namedCard = cleanName(draft?.card_name);
-  let account = namedAccount ? matchByName(accounts, namedAccount) : matchByName(accounts, text);
+  let account = (prior?.accountId ? accounts.find((item) => item.id === prior.accountId) : null) ?? (namedAccount ? matchByName(accounts, namedAccount) : null) ?? matchByName(accounts, text) ?? remembered.map((line) => matchByName(accounts, line)).find((value) => value != null) ?? null;
   let card = namedCard ? matchByName(cards, namedCard) : matchByName(cards, text);
+  const pendingAccountName = account ? null : namedAccount ?? prior?.pendingAccountName ?? null;
 
   if (!kind) {
-    return { reply: `${understood || "Entendi a frase."}\n\nNão achei se isso é receita, despesa ou conta a pagar. Diga qual dos três é.`, ready: false, draft: null, interview: null };
+    return {
+      reply: `${understood || "Entendi a frase."}\n\nNão achei se isso é receita, despesa ou conta a pagar. Diga qual dos três é.`,
+      ready: false,
+      draft: null,
+      interview: amount || description || date || account || pendingAccountName ? { kind: prior?.kind ?? "paid", amountCents: amount, occurredOn: date, description, accountId: account?.id ?? null, pendingAccountName, installments: prior?.installments ?? null, fixed: prior?.fixed === true } : null,
+    };
   }
-  if (namedAccount && !account) lines.push(`Não achei a conta ${namedAccount}. Você tem: ${accounts.map((item) => item.name).join(", ") || "nenhuma conta"}.`);
+  if (account?.archived) lines.push(`Achei a conta ${account.name}. Ela está arquivada e eu reativo ao lançar.`);
   else if (account) lines.push(`Achei a conta ${account.name}.`);
-  else if (!cardMode && accounts.length === 1) {
-    account = accounts[0] ?? null;
-    if (account) lines.push(`Achei a conta ${account.name}.`);
-  } else if (!cardMode) lines.push(`Não achei em qual conta lançar. Você tem: ${accounts.map((item) => item.name).join(", ") || "nenhuma conta"}.`);
+  else if (pendingAccountName) lines.push(`Não achei a conta ${pendingAccountName}. Diga cria que eu crio e continuo com o que você já falou.`);
+  else if (!cardMode && (openAccounts.length === 1 || accounts.length === 1)) {
+    account = openAccounts[0] ?? accounts[0] ?? null;
+    if (account) lines.push(account.archived ? `Achei a conta ${account.name}. Ela está arquivada e eu reativo ao lançar.` : `Achei a conta ${account.name}.`);
+  } else if (!cardMode && namedAccount) lines.push(`Não achei a conta ${namedAccount}. Você tem: ${accounts.map((item) => item.name).join(", ") || "nenhuma conta"}.`);
+  else if (!cardMode) lines.push(`Não achei em qual conta lançar. Você tem: ${accounts.map((item) => item.name).join(", ") || "nenhuma conta"}.`);
 
   if (cardMode) {
     if (namedCard && !card) lines.push(`Não achei o cartão ${namedCard}. Você tem: ${cards.map((item) => item.name).join(", ") || "nenhum cartão"}.`);
@@ -117,15 +132,15 @@ export function groundLaunch(text: string, data: FinanceData, today: string, und
   if (category) lines.push(`Achei a categoria ${category.name}.`);
   else if (description) lines.push(`Não achei a categoria ${description}. Vou criar e lançar nela.`);
 
-  const fromText = readInstallmentCount(text);
-  const installments = Math.min(48, Math.max(1, fromText ?? Math.round(draft?.installments || 1)));
-  const fixed = wantsFixedBill(text) && installments === 1 && kind !== "income" && !cardMode;
+  const fromText = readInstallmentCount(text) ?? remembered.map((line) => readInstallmentCount(line)).find((value) => value != null) ?? null;
+  const installments = Math.min(48, Math.max(1, fromText ?? prior?.installments ?? Math.round(draft?.installments || 1)));
+  const fixed = (wantsFixedBill(text) || prior?.fixed === true || remembered.some((line) => wantsFixedBill(line))) && installments === 1 && kind !== "income" && !cardMode;
   const missing: string[] = [];
   if (amount == null) missing.push(kind === "income" ? "Qual valor entrou?" : kind === "paid" ? "Qual valor saiu?" : "Qual é o valor?");
   if (!description) missing.push(kind === "income" ? "De onde veio esse dinheiro?" : "Como se chama esse lançamento?");
   if (!date) missing.push(kind === "upcoming" ? "Em que dia vence?" : "Em que dia foi? Pode dizer hoje, ontem ou 10/11.");
   if (cardMode && !card) missing.push("Qual cartão?");
-  if (!cardMode && !account) missing.push("Qual conta?");
+  if (!cardMode && !account && !pendingAccountName) missing.push("Qual conta?");
 
   const intro = understood.trim() || (description && amount ? `Entendi: ${description} de ${formatBRL(amount)}.` : "Entendi o pedido.");
   const found = lines.length ? lines.join("\n") : "Não achei conta nem categoria para este pedido.";
@@ -138,8 +153,9 @@ export function groundLaunch(text: string, data: FinanceData, today: string, und
       accountId: cardMode ? null : account?.id ?? null,
       installments: installments > 1 ? installments : null,
       fixed,
+      pendingAccountName: cardMode ? null : pendingAccountName,
     };
-    return { reply: `${intro}\n\n${found}\n\n${missing[0] ?? "Falta um detalhe para eu lançar."}`, ready: false, draft: null, interview };
+    return { reply: `${intro}\n\n${found}${missing[0] ? `\n\n${missing[0]}` : ""}`, ready: false, draft: null, interview };
   }
 
   const future = date > today;

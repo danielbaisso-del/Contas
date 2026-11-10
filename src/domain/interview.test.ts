@@ -117,6 +117,20 @@ describe("entrevista da IA", () => {
     expect(result.question).toMatch(/reativo/i);
   });
 
+  it("não pergunta de novo o valor que já foi dito", () => {
+    const first = conductInterview("income", "recebi salário", null, data, "2026-11-09");
+    expect(first.state.amountCents).toBeNull();
+    expect(first.state.description?.toLowerCase()).toContain("sal");
+    const second = conductInterview("income", "3200", first.state, data, "2026-11-09", "recebi salário");
+    expect(second.state.amountCents).toBe(320000);
+    expect(second.state.description?.toLowerCase()).toContain("sal");
+    expect(second.question ?? "").not.toMatch(/De onde veio/i);
+    const third = conductInterview("income", "hoje", second.state, data, "2026-11-09", "recebi salário\n3200");
+    expect(third.state.occurredOn).toBe("2026-11-09");
+    expect(third.state.amountCents).toBe(320000);
+    expect(third.question ?? "").not.toMatch(/Qual valor/i);
+  });
+
   it("aceita valor, origem, data e conta na mesma frase", () => {
     const result = conductInterview("paid", "paguei 150 de internet hoje na Caixa", null, data, "2026-11-09");
     expect(result.ready).toBe(true);

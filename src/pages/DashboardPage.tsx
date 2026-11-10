@@ -5,7 +5,7 @@ import { BalanceChart, BridgeChart, CategoryChart, FlowChart, type BridgeStep } 
 import { MoneyText } from "@/components/ui";
 import { useFinance } from "@/context/FinanceContext";
 import type { FinanceData } from "@/types/models";
-import { appendInstallmentMonths, balanceParts, buildDashboard, categoryMovement, inflowDates, invoiceTotal, ledgerTotals, openingIncome, openingOn, totalBalance } from "@/finance/engine";
+import { appendInstallmentMonths, balanceParts, buildDashboard, categoryMovement, inflowDates, invoiceTotal, ledgerTotals, openingIncome, openingOn } from "@/finance/engine";
 import { formatDateBR, formatMonthLabel, monthKey, monthRange, shiftMonth } from "@/lib/dates";
 import { formatBRL } from "@/lib/money";
 
@@ -56,7 +56,6 @@ export function DashboardPage() {
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 5);
   const accounts = data.accounts;
-  const saldoHoje = totalBalance(accounts, data.transactions, today);
   const periodEnd = month === monthKey(today) ? today : range.end;
   const nextPay = [...toPay.map((item) => item.dueOn || item.occurredOn), ...data.invoices.filter((invoice) => invoice.status !== "paid" && invoiceTotal(invoice.id, data.transactions) > 0).map((invoice) => invoice.dueOn)].sort()[0];
   const nextReceive = [...toReceive.map((item) => item.dueOn || item.occurredOn)].sort()[0];
@@ -64,48 +63,45 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Visão geral</h1>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">Você tem {formatBRL(model.availableCents)}. Está devendo {formatBRL(billsCents)}. Ainda vai receber {formatBRL(receiveCents)} e pagar {formatBRL(billsCents)}. No fim de {formatMonthLabel(month)} a previsão é {formatBRL(model.projectedEndCents)}.</p>
-        </div>
-        <div className="inline-flex max-w-full items-center self-start rounded-full border border-line bg-surface sm:self-auto">
-          <button className="px-3 py-2" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Mês anterior"><ChevronLeft size={16} /></button>
-          <span className="min-w-0 px-2 text-center text-sm font-medium">{formatMonthLabel(month)}</span>
-          <button className="px-3 py-2" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Próximo mês"><ChevronRight size={16} /></button>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="shrink-0 text-xl font-semibold tracking-tight sm:text-2xl">Visão geral</h1>
+        <div className="inline-flex items-center rounded-full border border-line bg-surface">
+          <button className="px-2 py-1.5 sm:px-3 sm:py-2" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Mês anterior"><ChevronLeft size={16} /></button>
+          <span className="whitespace-nowrap px-1 text-center text-xs font-medium sm:px-2 sm:text-sm">{formatMonthLabel(month)}</span>
+          <button className="px-2 py-1.5 sm:px-3 sm:py-2" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Próximo mês"><ChevronRight size={16} /></button>
         </div>
       </div>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <Link to="/contas" className="tap rounded-3xl border border-line bg-surface p-5">
-          <p className="text-sm text-muted">Saldo atual</p>
-          <p className="mt-2 text-2xl font-semibold sm:text-3xl"><MoneyText cents={model.availableCents} tone="auto" /></p>
-          <p className="mt-3 text-xs leading-5 text-muted">Em {todayLabel}. Saldo inicial, mais o que já entrou, menos o que já saiu. {formatBRL(saldoHoje)}.</p>
+      <section className="grid grid-cols-2 gap-2 sm:gap-4 xl:grid-cols-3">
+        <Link to="/contas" className="tap rounded-2xl border border-line bg-surface p-3 sm:rounded-3xl sm:p-5">
+          <p className="text-xs text-muted sm:text-sm">Saldo atual</p>
+          <p className="mt-1 text-lg font-semibold leading-tight sm:mt-2 sm:text-3xl"><MoneyText cents={model.availableCents} tone="auto" /></p>
+          <p className="mt-1 text-[11px] leading-4 text-muted sm:mt-3 sm:text-xs sm:leading-5">Em {todayLabel}</p>
         </Link>
-        <Link to="/receitas" className="tap rounded-3xl border border-line bg-surface p-5">
-          <p className="text-sm text-muted">Receitas do mês</p>
-          <p className="mt-2 text-2xl font-semibold sm:text-3xl"><MoneyText cents={model.incomeCents} tone="income" /></p>
-          <p className="mt-3 text-xs leading-5 text-muted">Recebido de {formatDateBR(range.start)} até {formatDateBR(periodEnd)}.</p>
+        <Link to="/receitas" className="tap rounded-2xl border border-line bg-surface p-3 sm:rounded-3xl sm:p-5">
+          <p className="text-xs text-muted sm:text-sm">Receitas do mês</p>
+          <p className="mt-1 text-lg font-semibold leading-tight sm:mt-2 sm:text-3xl"><MoneyText cents={model.incomeCents} tone="income" /></p>
+          <p className="mt-1 text-[11px] leading-4 text-muted sm:mt-3 sm:text-xs sm:leading-5">Até {formatDateBR(periodEnd)}</p>
         </Link>
-        <Link to="/despesas" className="tap rounded-3xl border border-line bg-surface p-5">
-          <p className="text-sm text-muted">Despesas do mês</p>
-          <p className="mt-2 text-2xl font-semibold sm:text-3xl"><MoneyText cents={model.spendingCents} tone="expense" /></p>
-          <p className="mt-3 text-xs leading-5 text-muted">Pago de {formatDateBR(range.start)} até {formatDateBR(periodEnd)}, mais as compras no cartão.</p>
+        <Link to="/despesas" className="tap rounded-2xl border border-line bg-surface p-3 sm:rounded-3xl sm:p-5">
+          <p className="text-xs text-muted sm:text-sm">Despesas do mês</p>
+          <p className="mt-1 text-lg font-semibold leading-tight sm:mt-2 sm:text-3xl"><MoneyText cents={model.spendingCents} tone="expense" /></p>
+          <p className="mt-1 text-[11px] leading-4 text-muted sm:mt-3 sm:text-xs sm:leading-5">Pagas até {formatDateBR(periodEnd)}</p>
         </Link>
-        <Link to="/compromissos" className="tap rounded-3xl border border-line bg-surface p-5">
-          <p className="text-sm text-muted">Contas a pagar</p>
-          <p className="mt-2 text-2xl font-semibold sm:text-3xl"><MoneyText cents={billsCents} tone="expense" /></p>
-          <p className="mt-3 text-xs leading-5 text-muted">{nextPay ? `Próxima em ${formatDateBR(nextPay)}. Contas em aberto e faturas do cartão.` : `Nenhuma em aberto em ${todayLabel}.`}</p>
+        <Link to="/compromissos" className="tap rounded-2xl border border-line bg-surface p-3 sm:rounded-3xl sm:p-5">
+          <p className="text-xs text-muted sm:text-sm">Contas a pagar</p>
+          <p className="mt-1 text-lg font-semibold leading-tight sm:mt-2 sm:text-3xl"><MoneyText cents={billsCents} tone="expense" /></p>
+          <p className="mt-1 text-[11px] leading-4 text-muted sm:mt-3 sm:text-xs sm:leading-5">{nextPay ? `Próxima em ${formatDateBR(nextPay)}` : `Nenhuma em ${todayLabel}`}</p>
         </Link>
-        <Link to="/compromissos" className="tap rounded-3xl border border-line bg-surface p-5">
-          <p className="text-sm text-muted">Contas a receber</p>
-          <p className="mt-2 text-2xl font-semibold sm:text-3xl"><MoneyText cents={receiveCents} tone="income" /></p>
-          <p className="mt-3 text-xs leading-5 text-muted">{nextReceive ? `Próxima em ${formatDateBR(nextReceive)}. Dinheiro combinado que ainda não entrou.` : `Nada a receber em ${todayLabel}.`}</p>
+        <Link to="/compromissos" className="tap rounded-2xl border border-line bg-surface p-3 sm:rounded-3xl sm:p-5">
+          <p className="text-xs text-muted sm:text-sm">Contas a receber</p>
+          <p className="mt-1 text-lg font-semibold leading-tight sm:mt-2 sm:text-3xl"><MoneyText cents={receiveCents} tone="income" /></p>
+          <p className="mt-1 text-[11px] leading-4 text-muted sm:mt-3 sm:text-xs sm:leading-5">{nextReceive ? `Próxima em ${formatDateBR(nextReceive)}` : `Nada em ${todayLabel}`}</p>
         </Link>
-        <Link id="previsao" to="/relatorios" className="tap scroll-mt-24 rounded-3xl border border-line bg-surface p-5">
-          <p className="text-sm text-muted">Saldo previsto no fim do mês</p>
-          <p className="mt-2 text-2xl font-semibold sm:text-3xl"><MoneyText cents={model.projectedEndCents} tone="auto" /></p>
-          <p className="mt-3 text-xs leading-5 text-muted">Até {formatDateBR(range.end)}. Saldo de hoje, mais o que ainda entra, menos o que ainda sai.</p>
+        <Link id="previsao" to="/relatorios" className="tap scroll-mt-24 rounded-2xl border border-line bg-surface p-3 sm:rounded-3xl sm:p-5">
+          <p className="text-xs text-muted sm:text-sm">Previsto no mês</p>
+          <p className="mt-1 text-lg font-semibold leading-tight sm:mt-2 sm:text-3xl"><MoneyText cents={model.projectedEndCents} tone="auto" /></p>
+          <p className="mt-1 text-[11px] leading-4 text-muted sm:mt-3 sm:text-xs sm:leading-5">Até {formatDateBR(range.end)}</p>
         </Link>
       </section>
 

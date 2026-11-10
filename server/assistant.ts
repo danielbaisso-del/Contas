@@ -21,7 +21,7 @@ const SYSTEM = `Você é a conversa do aplicativo Contas. Fale como uma IA que e
 Os números do contexto são os dados gravados. Use só esses centavos. Não invente saldo e não escreva SQL.
 Quando a pessoa informar valor, data, conta ou categoria para lançar, preencha o draft. O aplicativo é quem guarda. amount_cents só se ela falou o número: R$ 85 vira 8500.
 message é uma frase curta do que você entendeu, sem dizer que já salvou.
-Se a pessoa quer gravar receita, despesa, conta a pagar ou compra, use create_transaction e preencha description, type, status, category_name, account_name e card_name com as palavras dela.
+Se a pessoa quer gravar receita, despesa, conta a pagar ou compra, use create_transaction e preencha description, type, status, category_name, account_name e card_name com as palavras dela. Se o valor, a data, o nome ou a conta já apareceram na conversa ou em lancamento_em_andamento, copie para o draft e não peça de novo.
 Recebi = income received. Paguei, gastei ou comprei = expense paid. Devo, falta pagar ou conta a pagar = expense pending.
 Transferência entre contas = create_transfer. Pergunta sobre os números dela = query, sem responder o número.
 Conversa, explicação ou pedido que não é número nem lançamento = chat.
@@ -680,7 +680,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     }
     const interview = readInterview(body.interview);
     const context = rememberedText(body.history);
-    const followUp = /\b(ja falei|eu ja disse|como eu disse|crie a conta|cria a conta|o valor|pode lancar|pode salvar)\b/.test(normalizeText(text))
+    const followUp = /\b(ja falei|eu ja disse|como eu disse|como falei|te falei|ja disse|crie a conta|cria a conta|o valor|pode lancar|pode salvar|isso mesmo|essa mesma)\b/.test(normalizeText(text)) || (interview != null && /\bcria\b/.test(normalizeText(text)))
       || (/^\d/.test(text.trim()) && text.trim().length <= 20)
       || (explicitDate(text, today) != null && text.trim().length <= 24);
     const spoken = inferEntry(text) ?? ((interview || followUp) && !isQuestion(text) ? inferEntry(context) : null);
@@ -765,7 +765,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     if (readAmountCents(text) == null && !inferEntry(text) && !/\b(transferi|transferir|anota|anotar|lanca|lan[cç]ar)\b/.test(normalized) && /^(oi|ola|obrigad|bom dia|boa tarde|boa noite)\b|explica|para que serve|o que (e|voce) faz|como (eu )?uso|como funciona/.test(normalized)) {
       sendJson(res, 200, {
         reply: "Eu cuido do seu dinheiro neste app. Digo quanto você tem, quanto deve, o que ainda vai receber e pagar, e quanto sobra no fim do mês. Quando você fala um valor, eu procuro a conta e a categoria. Se achar, eu lanço, inclusive parcela e conta fixa. Também mudo valor, data e nome, marco como pago ou recebido e apago o lançamento que você nomear.",
-        interview: null,
+        interview,
         confirmation: null,
       });
       return;
@@ -787,12 +787,12 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     };
     let intent: Awaited<ReturnType<typeof interpretIntent>>;
     try {
-      intent = await interpretIntent(`Contexto do sistema desta pessoa:\n${JSON.stringify(facts)}\n\nConversa recente:\n${historyText || "(vazia)"}\n\nPedido:\n${text}`);
+      intent = await interpretIntent(`Contexto do sistema desta pessoa:\n${JSON.stringify(facts)}\n\nConversa recente:\n${historyText || "(vazia)"}\n${interview ? `\nLancamento em andamento. Nao peca de novo o que ja esta preenchido:\n${JSON.stringify(interview)}\n` : ""}\nPedido:\n${text}`);
     } catch (error) {
       if (error instanceof HttpError && (error.status === 429 || error.status === 503)) throw error;
       sendJson(res, 200, {
         reply: "Entendi a conversa. Se quiser gravar alguma coisa, diga o valor e o nome. Eu procuro a conta e a categoria e, se achar, eu lanço.",
-        interview: null,
+        interview,
         confirmation: null,
       });
       return;
@@ -819,7 +819,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     }
     const money = intent.action === "create_transaction" || intent.action === "clarify" || inferEntry(text) != null || readAmountCents(text) != null;
     if (money && intent.action !== "query") {
-      const grounded = groundLaunch(text, data, today, plainMessage(intent.message), intent.draft ?? null);
+      const grounded = groundLaunch(text, data, today, plainMessage(intent.message), intent.draft ?? null, { interview, context });
       if (!grounded.ready || !grounded.draft) {
         sendJson(res, 200, { reply: grounded.reply, interview: grounded.interview, confirmation: null });
         return;
@@ -835,7 +835,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
         reply: `Olhei no sistema.\n\n${answerQuery(query, data, today, text)}`,
         chart: chartForQuery(query, data, today, text),
         place: placeForQuery(query, data, today, text),
-        interview: null,
+        interview,
         confirmation: null,
       });
       return;
@@ -843,7 +843,7 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
     sendJson(res, 200, {
       reply: `${plainMessage(intent.message)}${lookupNotes(intent.draft ?? null, data)}`,
       place: placeFromText(text),
-      interview: null,
+      interview,
       confirmation: null,
     });
   } catch (error) {

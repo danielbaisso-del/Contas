@@ -73,6 +73,15 @@ describe("leitura livre do chat", () => {
     expect(found.amountCents).toBe(10000);
   });
 
+  it("continua o lançamento sem pedir o valor outra vez", () => {
+    const open = { kind: "upcoming" as const, amountCents: 45000, occurredOn: null, description: "Aluguel", accountId: "a" };
+    const result = groundLaunch("dia 10", data, "2026-11-09", "O aluguel vence dia 10.", { description: "Aluguel", type: "expense", status: "pending" }, { interview: open, context: "devo 450 de aluguel" });
+    expect(result.ready).toBe(true);
+    expect(result.draft?.amountCents).toBe(45000);
+    expect(result.draft?.occurredOn).toBe("2026-11-10");
+    expect(result.reply).not.toMatch(/Qual é o valor/i);
+  });
+
   it("deixa uma frase nova sair do lançamento que estava aberto", () => {
     const open = { kind: "upcoming" as const, amountCents: 45000, occurredOn: null, description: "Aluguel", accountId: "a" };
     expect(continuesInterview("dia 10", open, data, "2026-11-09")).toBe(true);
