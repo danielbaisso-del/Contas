@@ -25,6 +25,7 @@ export interface HouseholdSummary {
 
 export interface HouseholdPart {
   name: string;
+  you?: boolean;
   data: FinanceData;
 }
 

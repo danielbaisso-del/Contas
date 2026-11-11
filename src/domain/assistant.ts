@@ -103,7 +103,7 @@ export interface AssistantPlace {
 }
 
 export interface InterviewState {
-  kind: "income" | "paid" | "upcoming";
+  kind: "income" | "paid" | "upcoming" | "unset";
   amountCents: number | null;
   occurredOn: string | null;
   description: string | null;
@@ -111,6 +111,8 @@ export interface InterviewState {
   installments?: number | null;
   fixed?: boolean;
   pendingAccountName?: string | null;
+  perInstallment?: boolean;
+  askInstallments?: boolean;
 }
 
 export interface AssistantResponse {

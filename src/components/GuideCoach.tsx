@@ -7,6 +7,7 @@ import { PlaceLink } from "@/components/PlaceLink";
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
 import type { AssistantChart, AssistantPlace, AssistantResponse, Confirmation, InterviewState } from "@/domain/assistant";
+import { simpleChips } from "@/domain/simpleEntry";
 import { isSkip } from "@/domain/guide";
 import { errorMessage } from "@/lib/utils";
 import { askAssistant } from "@/services/ai";
@@ -30,29 +31,21 @@ export function useGuide() {
   return value;
 }
 
-const WELCOME = "Pode escrever do seu jeito. Eu entendo a frase, olho se a conta, a categoria ou o lançamento existe aqui e, se achar, lanço para você. Também digo quanto você tem, quanto deve, o que falta e quanto sobra.";
-const GROUP_WELCOME = "Aqui eu olho as contas de quem aceitou o grupo. Pergunte quanto vocês têm, quanto devem, o que falta e quanto sobra. Cada pessoa continua lançando na própria conta.";
+const WELCOME = "Diga o nome, o valor e a data. Exemplo: gastei 80 de mercado hoje. Se for parcelado, diga em quantas vezes.";
+const GROUP_WELCOME = "Aqui eu vejo os gastos e recebimentos de quem aceitou. Posso lançar o seu, com nome, valor e data. Também digo o que vocês lançaram.";
 
-const GROUP_ACTIONS: Array<{ label: string; text: string; kind: "ask" }> = [
-  { label: "Quanto temos?", text: "Quanto dinheiro temos?", kind: "ask" },
-  { label: "Quanto devemos?", text: "Quanto estamos devendo?", kind: "ask" },
-  { label: "O que falta?", text: "Quanto ainda vamos receber e pagar?", kind: "ask" },
-  { label: "Quanto sobra?", text: "Quanto vai sobrar no fim do mês?", kind: "ask" },
-  { label: "Quem gastou?", text: "Quem gastou mais neste mês?", kind: "ask" },
-  { label: "Gráficos", text: "Mostra os gráficos do grupo", kind: "ask" },
+const GROUP_ACTIONS: Array<{ label: string; text: string; kind: "entry" | "ask" }> = [
+  { label: "Gasto", text: "lançar um gasto", kind: "entry" },
+  { label: "Recebido", text: "lançar um recebimento", kind: "entry" },
+  { label: "Parcelado", text: "lançar um gasto parcelado", kind: "entry" },
+  { label: "O que lançamos", text: "o que lançamos neste mês", kind: "ask" },
+  { label: "Quem gastou", text: "quem gastou neste mês", kind: "ask" },
 ];
 
-const ACTIONS: Array<{ label: string; text: string; kind: "ask" | "entry" | "account" }> = [
-  { label: "Quanto tenho?", text: "Quanto dinheiro tenho?", kind: "ask" },
-  { label: "Quanto devo?", text: "Quanto estou devendo?", kind: "ask" },
-  { label: "O que falta?", text: "Quanto ainda vou receber e pagar?", kind: "ask" },
-  { label: "Quanto sobra?", text: "Quanto vai sobrar no fim do mês?", kind: "ask" },
-  { label: "Nova receita", text: "Quero lançar uma receita", kind: "entry" },
-  { label: "Nova despesa", text: "Quero lançar uma despesa", kind: "entry" },
-  { label: "Conta a pagar", text: "Quero lançar uma conta a pagar", kind: "entry" },
-  { label: "Cartões", text: "Como estão os cartões?", kind: "ask" },
-  { label: "Gráficos", text: "Mostra os gráficos do mês", kind: "ask" },
-  { label: "Nova conta", text: "Quero cadastrar uma conta", kind: "account" },
+const ACTIONS: Array<{ label: string; text: string; kind: "entry" }> = [
+  { label: "Gasto", text: "lançar um gasto", kind: "entry" },
+  { label: "Recebido", text: "lançar um recebimento", kind: "entry" },
+  { label: "Parcelado", text: "lançar um gasto parcelado", kind: "entry" },
 ];
 
 function speechRecognizer() {
@@ -66,7 +59,7 @@ function speechRecognizer() {
 }
 
 export function GuideProvider({ children }: { children: ReactNode }) {
-  const { data, refresh, loading: financeLoading } = useFinance();
+  const { refresh } = useFinance();
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [accountMode, setAccountMode] = useState(false);
@@ -119,20 +112,9 @@ export function GuideProvider({ children }: { children: ReactNode }) {
         };
       });
       setItems((current) => (current.some((item) => item.role === "user") ? current : restored));
-      const last = [...messages].reverse().find((message) => message.role === "assistant");
-      const interviewSaved = last?.payload && typeof last.payload === "object" ? (last.payload as { interview?: InterviewState | null }).interview : null;
-      if (interviewSaved) setInterview((current) => current ?? interviewSaved);
     }).catch(() => undefined);
     return () => { cancel = true; };
   }, []);
-
-  useEffect(() => {
-    if (financeLoading || sessionStorage.getItem("contas-guide-auto")) return;
-    if (data.accounts.some((account) => !account.archived)) return;
-    sessionStorage.setItem("contas-guide-auto", "1");
-    setItems((current) => current.length ? current : [{ id: crypto.randomUUID(), role: "assistant", content: WELCOME, confirmation: null, chart: null, place: null }]);
-    setOpen(true);
-  }, [data.accounts, financeLoading]);
 
   function openGuide() {
     const welcome = group ? GROUP_WELCOME : WELCOME;
@@ -148,7 +130,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     setInterview(null);
     setAccountMode(false);
     setItems((current) => [...current, { id: crypto.randomUUID(), role: "user", content, confirmation: null, chart: null, place: null }]);
-    say("Parei esse lançamento. Pode perguntar o saldo, a dívida, o que falta ou quanto sobra.");
+    say(group ? "Parei esse lançamento. Diga o nome, o valor e a data, ou pergunte o que vocês lançaram." : "Parei esse lançamento. Diga o nome, o valor e a data.");
   }
 
   async function send(raw?: string, options?: { guide?: "account" | null; interview?: InterviewState | null }) {
@@ -167,7 +149,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     if (!group) void saveAssistantMessage("user", content).catch(() => undefined);
     setLoading(true);
     try {
-      const response = await askAssistant({ mode: "interpret", text: content, history, guide: group ? undefined : guide, interview: group ? null : currentInterview, household: group });
+      const response = await askAssistant({ mode: "interpret", text: content, history, guide: group ? undefined : guide, interview: currentInterview, household: group });
       if (response.chart) setFocusChart(response.chart);
       setInterview(response.interview ?? null);
       if (response.saved) await refresh();
@@ -225,31 +207,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  function choose(action: (typeof ACTIONS)[number]) {
-    if (action.kind === "ask") {
-      setAccountMode(false);
-      void send(action.text, { guide: null, interview });
-      return;
-    }
-    if (action.kind === "account") {
-      setInterview(null);
-      setAccountMode(true);
-      void send(action.text, { guide: "account", interview: null });
-      return;
-    }
-    setAccountMode(false);
-    setInterview(null);
-    void send(action.text, { guide: null, interview: null });
-  }
-
-  const accounts = data.accounts;
-  const followUps = interview?.amountCents != null && !interview.description
-    ? data.categories.filter((category) => category.kind === (interview.kind === "income" ? "income" : "expense")).slice(0, 6).map((category) => category.name)
-    : interview?.description && !interview.occurredOn
-      ? ["hoje", "ontem"]
-      : interview?.occurredOn && !interview.accountId && accounts.length > 1
-        ? accounts.map((account) => account.name)
-        : [];
+  const followUps = simpleChips(interview);
 
   return (
     <GuideContext.Provider value={{ openGuide, focusChart }}>
@@ -277,12 +235,12 @@ export function GuideProvider({ children }: { children: ReactNode }) {
             </div>
             <div className="space-y-3 border-t border-line px-4 py-3 sm:px-5 sm:py-4" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
               <div className="flex flex-wrap gap-2">
-                {(followUps.length && !group ? followUps.map((label) => ({ label, text: label, kind: "entry" as const })) : group ? GROUP_ACTIONS : ACTIONS).map((action) => (
-                  <button key={action.label} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-xs font-medium" disabled={loading} type="button" onClick={() => followUps.length ? void send(action.text) : choose(action)}>{action.label}</button>
+                {(followUps.length ? followUps.map((label) => ({ label, text: label, fresh: false })) : (group ? GROUP_ACTIONS : ACTIONS).map((action) => ({ ...action, fresh: true }))).map((action) => (
+                  <button key={action.label} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-xs font-medium" disabled={loading} type="button" onClick={() => { if (action.fresh) { setInterview(null); setAccountMode(false); } void send(action.text, action.fresh ? { guide: null, interview: null } : undefined); }}>{action.label}</button>
                 ))}
                 {interview || accountMode ? <button className="rounded-full border border-line px-3 py-1.5 text-xs text-muted" type="button" onClick={() => stopEntry("só isso")}>Cancelar</button> : null}
               </div>
-              <textarea className="w-full rounded-2xl border border-line bg-canvas px-3 py-3 text-sm text-ink outline-none focus:border-accent" rows={2} value={text} placeholder="Escreva do seu jeito. Exemplo: devo 450 de aluguel" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+              <textarea className="w-full rounded-2xl border border-line bg-canvas px-3 py-3 text-sm text-ink outline-none focus:border-accent" rows={2} value={text} placeholder="Exemplo: gastei 80 de mercado hoje" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
               <div className="flex gap-2">
                 <button className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold ${listening ? "bg-expense text-white" : "bg-accent text-white"}`} onClick={listen} type="button">
                   {listening ? <Square size={16} /> : <Mic size={16} />}

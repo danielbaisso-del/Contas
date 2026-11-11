@@ -42,6 +42,38 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} className={cx(fieldClass, props.className)} />;
 }
 
+const MONTH_NAMES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+export function DateBRField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const today = new Date();
+  const year = Number(match?.[1] ?? today.getFullYear());
+  const month = Number(match?.[2] ?? today.getMonth() + 1);
+  const day = Number(match?.[3] ?? today.getDate());
+  const years = Array.from({ length: 11 }, (_, index) => year - 5 + index);
+  const dayCount = new Date(year, month, 0).getDate();
+  function commit(nextDay: number, nextMonth: number, nextYear: number) {
+    const max = new Date(nextYear, nextMonth, 0).getDate();
+    const safe = Math.min(Math.max(1, nextDay), max);
+    onChange(`${nextYear}-${String(nextMonth).padStart(2, "0")}-${String(safe).padStart(2, "0")}`);
+  }
+  return (
+    <Field label={label} hint="Primeiro o dia, depois o mês e o ano.">
+      <div className="grid grid-cols-3 gap-2">
+        <Select aria-label="Dia" value={String(Math.min(day, dayCount))} onChange={(event) => commit(Number(event.target.value), month, year)}>
+          {Array.from({ length: dayCount }, (_, index) => index + 1).map((item) => <option key={item} value={item}>{String(item).padStart(2, "0")}</option>)}
+        </Select>
+        <Select aria-label="Mês" value={String(month)} onChange={(event) => commit(day, Number(event.target.value), year)}>
+          {MONTH_NAMES.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
+        </Select>
+        <Select aria-label="Ano" value={String(year)} onChange={(event) => commit(day, month, Number(event.target.value))}>
+          {years.map((item) => <option key={item} value={item}>{item}</option>)}
+        </Select>
+      </div>
+    </Field>
+  );
+}
+
 export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...props} className={cx(fieldClass, "min-h-24 resize-y", props.className)} />;
 }

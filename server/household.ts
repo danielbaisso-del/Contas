@@ -20,6 +20,7 @@ interface MemberRow {
 
 export interface HouseholdPart {
   name: string;
+  you: boolean;
   data: FinanceData;
 }
 
@@ -182,6 +183,7 @@ export async function householdBundle(userId: string, email: string): Promise<Ho
   const packed = { accounts, categories, cards, transactions, recurrences, invoices };
   const parts = accepted.map((member) => ({
     name: displayName(member, names),
+    you: member.user_id === userId,
     data: dataFor(member.user_id as string, packed),
   }));
   return {

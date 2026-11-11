@@ -1,27 +1,21 @@
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { ArrowDownCircle, ArrowUpCircle, CalendarDays, CreditCard, LayoutDashboard, LogOut, Menu, Moon, PieChart, RefreshCw, Shield, Sun, Trash2, Users, X } from "lucide-react";
+import { Calculator, CalendarDays, LogOut, Menu, Moon, PieChart, RefreshCw, Shield, Sun, Users, X } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useFinance } from "@/context/FinanceContext";
 import { useTheme } from "@/context/ThemeContext";
-import { useToast } from "@/context/ToastContext";
 import { checkAdmin } from "@/services/admin";
-import { loadHousehold, respondInvite, type HouseholdInvite } from "@/services/household";
 import { saveProfileName } from "@/services/data";
 import { supabase } from "@/services/supabase";
 import { GuideProvider } from "@/components/GuideCoach";
 import { Button, Field, Input, Modal } from "@/components/ui";
-import { cx, errorMessage } from "@/lib/utils";
+import { cx } from "@/lib/utils";
 
 const items = [
-  { to: "/", label: "Visão geral", short: "Visão", icon: LayoutDashboard, end: true },
-  { to: "/receitas", label: "Receitas", short: "Receitas", icon: ArrowDownCircle, end: false },
-  { to: "/despesas", label: "Despesas", short: "Despesas", icon: ArrowUpCircle, end: false },
-  { to: "/compromissos", label: "A pagar e receber", short: "Contas", icon: CalendarDays, end: false },
-  { to: "/cartoes", label: "Cartões", short: "Cartões", icon: CreditCard, end: false },
-  { to: "/relatorios", label: "Relatórios", short: "Gráficos", icon: PieChart, end: false },
-  { to: "/lixeira", label: "Lixeira", short: "Lixeira", icon: Trash2, end: false },
+  { to: "/", label: "Calendário", short: "Calendário", icon: CalendarDays, end: true },
   { to: "/conjunto", label: "Juntos", short: "Juntos", icon: Users, end: false },
+  { to: "/grafico", label: "Gráfico", short: "Gráfico", icon: PieChart, end: false },
+  { to: "/calculadora", label: "Calculadora", short: "Calcular", icon: Calculator, end: false },
 ];
 
 export function AppLayout() {
@@ -29,14 +23,10 @@ export function AppLayout() {
   const { profile, refresh, loading, error } = useFinance();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
-  const location = useLocation();
-  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [admin, setAdmin] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [name, setName] = useState(profile?.fullName ?? "");
-  const [invites, setInvites] = useState<HouseholdInvite[]>([]);
-  const [inviteOpen, setInviteOpen] = useState(false);
 
   useEffect(() => {
     if (!session) {
@@ -44,12 +34,7 @@ export function AppLayout() {
       return;
     }
     void checkAdmin().then(setAdmin).catch(() => setAdmin(false));
-    void loadHousehold().then((summary) => {
-      setInvites(summary.invites);
-      const seen = sessionStorage.getItem("contas-household-invite") ?? "";
-      if (summary.invites.some((invite) => !seen.includes(invite.id))) setInviteOpen(true);
-    }).catch(() => setInvites([]));
-  }, [session, location.pathname]);
+  }, [session]);
 
   async function logout() {
     await supabase.auth.signOut();
@@ -88,10 +73,10 @@ export function AppLayout() {
       <div className="lg:pl-64">
         <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-line bg-canvas/90 px-3 py-2 backdrop-blur sm:px-4 sm:py-3 md:px-8" style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}>
           <button className="rounded-xl border border-line p-2 lg:hidden" onClick={() => setOpen(true)} aria-label="Abrir menu"><Menu size={18} /></button>
-          <div className="hidden min-w-0 text-sm text-muted sm:block">Quanto tenho, quanto devo, o que falta e quanto sobra.</div>
+          <div className="hidden min-w-0 text-sm text-muted sm:block">Nome, valor e data.</div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <Button variant="secondary" className="px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" onClick={() => navigate("/receitas?novo=1")}>Receita</Button>
-            <Button className="px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" onClick={() => navigate("/despesas?novo=1")}>Despesa</Button>
+            <Button variant="secondary" className="px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" onClick={() => navigate("/?novo=recebido")}>Recebido</Button>
+            <Button className="px-2.5 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" onClick={() => navigate("/?novo=gasto")}>Gasto</Button>
             <button className="rounded-xl border border-line p-2" onClick={() => void refresh()} aria-label="Atualizar"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /></button>
             <button className="rounded-xl border border-line p-2" onClick={toggle} aria-label="Alternar tema">{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}</button>
           </div>
@@ -112,22 +97,6 @@ export function AppLayout() {
           ))}
         </div>
       </nav>
-      {inviteOpen && invites.length ? (
-        <Modal title="Pedido para juntar as contas" onClose={() => { sessionStorage.setItem("contas-household-invite", invites.map((invite) => invite.id).join(",")); setInviteOpen(false); }}>
-          <div className="space-y-4">
-            {invites.map((invite) => (
-              <div key={invite.id} className="space-y-3 text-sm leading-6">
-                <p><strong>{invite.fromName}</strong>{invite.fromEmail ? ` (${invite.fromEmail})` : ""} quer ver com você os ganhos, os gastos e as contas futuras.</p>
-                <p className="text-muted">Se você aceitar, os dois passam a ter a aba Juntos. Sua conta pessoal continua separada, e cada pessoa lança no próprio acesso.</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button onClick={async () => { try { await respondInvite(invite.id, "accept"); setInvites((current) => current.filter((item) => item.id !== invite.id)); setInviteOpen(false); navigate("/conjunto"); } catch (caught) { toast(errorMessage(caught), "error"); } }}>Aceitar</Button>
-                  <Button variant="secondary" onClick={async () => { try { await respondInvite(invite.id, "decline"); setInvites((current) => current.filter((item) => item.id !== invite.id)); setInviteOpen(false); } catch (caught) { toast(errorMessage(caught), "error"); } }}>Recusar</Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Modal>
-      ) : null}
       {profileOpen ? (
         <Modal title="Sua conta" onClose={() => setProfileOpen(false)}>
           <form className="space-y-4" onSubmit={async (event) => { event.preventDefault(); await saveProfileName(name); await refresh(); setProfileOpen(false); }}>

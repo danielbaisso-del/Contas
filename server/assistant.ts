@@ -1,8 +1,10 @@
 import { accountDraftSchema, intentSchema, transactionDraftSchema, transferDraftSchema, type AssistantPlace, type AssistantResponse, type InterviewState, type TransactionDraft } from "@/domain/assistant";
-import { groundLaunch, groundTransfer, type GroundLaunch, type UnderstoodDraft } from "@/domain/ground";
-import { conductInterview, continuesInterview, explicitDate, inferEntry, readAmountCents, rememberedText } from "@/domain/interview";
+import { type GroundLaunch, type UnderstoodDraft } from "@/domain/ground";
+import { explicitDate, inferEntry, readAmountCents, rememberedText } from "@/domain/interview";
+import { launchItems, plainName } from "@/domain/launches";
+import { conductSimple } from "@/domain/simpleEntry";
 import { resolveAmountCents, suggestCategory } from "@/domain/resolveText";
-import { accountBalance, balanceParts, buildDashboard, categoryMovement, ledgerTotals, openingOn } from "@/finance/engine";
+import { accountBalance } from "@/finance/engine";
 import { planBankInstallments, planCardInstallments, installmentsForDatabase } from "@/finance/installments";
 import { formatDateBR, monthKey, todayISO } from "@/lib/dates";
 import { accountTypeLabel, COLORS } from "@/lib/labels";
@@ -11,11 +13,11 @@ import { isTrashed, isTrashedAccount } from "@/lib/trash";
 import { matchByName, normalizeText } from "@/lib/utils";
 import { mapAccount, mapCard, mapCategory, mapInvoice, mapRecurrence, mapTransaction } from "@/services/mappers";
 import type { FinanceData } from "@/types/models";
-import { answerQuery, chartForQuery, placeAfterSave, placeForQuery, placeFromText } from "./answers";
-import { householdBundle } from "./household";
+import { placeAfterSave } from "./answers";
+import { householdBundle, type HouseholdBundle } from "./household";
 import { geminiJson, parseModelJson } from "./gemini";
 import { HttpError, readJson, sendJson, type NodeRequest, type NodeResponse } from "./http";
-import { consumeAiQuota, requireUser, userClient } from "./supabase";
+import { requireUser, userClient } from "./supabase";
 
 const SYSTEM = `Você é a conversa do aplicativo Contas. Fale como uma IA que entende português, datas, valores e o que a pessoa já disse. Devolva somente JSON.
 Os números do contexto são os dados gravados. Use só esses centavos. Não invente saldo e não escreva SQL.
@@ -29,7 +31,7 @@ query.metric pode ser available_balance, month_overview, forecast, category_tota
 Formato:
 {"action":"chat|clarify|create_transaction|create_transfer|query","message":"","missing":[],"draft":{"description":"","amount_cents":0,"type":"expense","occurred_on":"","due_on":null,"category_name":null,"account_name":null,"card_name":null,"payment_method":null,"notes":null,"status":null,"installments":1},"transfer":{"description":"Transferência","amount_cents":0,"occurred_on":"","from_account_name":"","to_account_name":""},"query":{"metric":"available_balance|month_overview|forecast|category_total|upcoming|can_afford|account_balance|debt|open_items|cards","category_name":null,"account_name":null,"month":null,"months":null,"days":null,"amount_cents":null,"installments":null,"payment":null,"starting_on":null}}`;
 
-function forcedQuery(text: string) {
+export function forcedQuery(text: string) {
   const lower = normalizeText(text);
   if (/cartao|fatura/.test(lower) && !/o que e|o que significa|explica|como funciona/.test(lower) && readAmountCents(text) == null && !inferEntry(text)) return { metric: "cards" as const };
   if (/posso comprar|se eu comprar|cabe no orcamento/.test(lower)) return { metric: "can_afford" as const };
@@ -43,11 +45,11 @@ function forcedQuery(text: string) {
   return null;
 }
 
-function wantsNewAccount(text: string): boolean {
+export function wantsNewAccount(text: string): boolean {
   return /\b(cadastrar uma conta|nova conta|criar uma conta|criar conta|crie a conta|cria a conta|cadastra a conta)\b/.test(normalizeText(text));
 }
 
-function inferInstallments(text: string): number | null {
+export function inferInstallments(text: string): number | null {
   const match = text.match(/\b(\d{1,2})\s*x\b/i) ?? text.match(/\b(\d{1,2})\s*parcelas?\b/i);
   if (!match) return null;
   const count = Number(match[1]);
@@ -86,7 +88,7 @@ async function loadData(token: string): Promise<FinanceData> {
   };
 }
 
-async function interpretIntent(prompt: string) {
+export async function interpretIntent(prompt: string) {
   const first = parseModelJson(await geminiJson(prompt, SYSTEM));
   const parsed = intentSchema.safeParse(first);
   if (parsed.success) return parsed.data;
@@ -128,7 +130,7 @@ function inferAccountType(text: string): "checking" | "savings" | "cash" | "digi
   return "checking";
 }
 
-function buildAccount(text: string, data: FinanceData, earlier: string): AssistantResponse {
+export function buildAccount(text: string, data: FinanceData, earlier: string): AssistantResponse {
   const corpus = `${earlier}\n${text}`;
   const amount = amountFromSpeech(text) ?? amountFromSpeech(corpus);
   const name = accountNameFrom(text) || accountNameFrom(earlier);
@@ -279,82 +281,64 @@ async function confirmDraft(token: string, body: Record<string, unknown>, data: 
   return { reply: `${draft.type === "income" ? "Receita" : "Despesa"} de ${formatBRL(draft.amount_cents)} salva.\n\nA visão geral deste mês já mostra o valor nos gráficos.`, place: placeAfterSave("transaction", draft) };
 }
 
-function householdPlace(metric: string) {
-  if (metric === "forecast" || metric === "can_afford") return { label: "Ver a previsão do grupo", to: "/conjunto#previsao" };
-  if (metric === "category_total") return { label: "Ver as categorias do grupo", to: "/conjunto#categorias" };
-  if (metric === "upcoming") return { label: "Ver o que ainda vem", to: "/conjunto#futuro" };
-  if (metric === "available_balance" || metric === "account_balance") return { label: "Ver o saldo do grupo", to: "/conjunto#saldos" };
-  return { label: "Ver o mês do grupo", to: "/conjunto#mes" };
+function isGroupQuestion(text: string): boolean {
+  const normalized = normalizeText(text);
+  return /\b(quem gastou|quem recebeu|quem lancou|o que lancamos|o que foi lancado|o que entrou|o que saiu|quanto gastamos|quanto entrou|quanto recebemos|lancamentos)\b/.test(normalized);
 }
 
-async function answerHousehold(userId: string, email: string, text: string, today: string, res: NodeResponse): Promise<void> {
-  const bundle = await householdBundle(userId, email);
-  if (!bundle) {
+function groupLaunchReply(bundle: HouseholdBundle, text: string, today: string): string {
+  const month = monthKey(today);
+  const rows = bundle.parts.flatMap((part) => launchItems(part.data)
+    .filter((item) => item.date.startsWith(month))
+    .map((item) => ({ ...item, person: part.you ? "Você" : part.name })))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.person.localeCompare(b.person) || a.name.localeCompare(b.name));
+  if (!rows.length) return "Neste mês ninguém lançou gasto nem recebimento.";
+  if (/\bquem\b/.test(normalizeText(text))) {
+    const people = [...new Set(rows.map((row) => row.person))];
+    const lines = people.map((person) => {
+      const mine = rows.filter((row) => row.person === person);
+      const spent = mine.filter((row) => row.kind === "expense").reduce((sum, row) => sum + row.amountCents, 0);
+      const received = mine.filter((row) => row.kind === "income").reduce((sum, row) => sum + row.amountCents, 0);
+      const names = mine.filter((row) => row.kind === "expense").map((row) => plainName(row.name)).join(", ");
+      return `${person}: gastou ${formatBRL(spent)}${names ? ` (${names})` : ""} e recebeu ${formatBRL(received)}.`;
+    });
+    return ["Neste mês, cada pessoa lançou:", "", ...lines].join("\n");
+  }
+  const entered = rows.filter((row) => row.kind === "income").reduce((sum, row) => sum + row.amountCents, 0);
+  const left = rows.filter((row) => row.kind === "expense").reduce((sum, row) => sum + row.amountCents, 0);
+  const lines = rows.map((row) => `${formatDateBR(row.date)} · ${row.person} · ${row.name} · ${row.kind === "income" ? "entrou" : "saiu"} ${formatBRL(row.amountCents)}`);
+  return ["Lançamentos deste mês:", "", ...lines, "", `Entrou ${formatBRL(entered)}. Saiu ${formatBRL(left)}.`].join("\n");
+}
+
+async function answerHousehold(token: string, userId: string, email: string, text: string, today: string, res: NodeResponse, data: FinanceData, interview: InterviewState | null, context: string): Promise<void> {
+  let bundle: HouseholdBundle | null = null;
+  try {
+    bundle = await householdBundle(userId, email);
+  } catch (error) {
+    if (isGroupQuestion(text)) throw error;
+  }
+  if (isGroupQuestion(text)) {
     sendJson(res, 200, {
-      reply: "Ainda não há um grupo aceito. Envie o convite pelo e-mail e espere a outra pessoa aceitar. Até lá eu olho só a sua conta, na bolha das outras telas.",
-      place: { label: "Voltar para o convite", to: "/conjunto" },
+      reply: bundle ? groupLaunchReply(bundle, text, today) : "Ainda não há um grupo aceito. Envie o convite pelo e-mail e espere a outra pessoa aceitar.",
+      place: { label: "Ver o calendário do grupo", to: "/conjunto" },
+      interview: null,
       confirmation: null,
     });
     return;
   }
-  const normalized = normalizeText(text);
-  const writing = /\b(adicione|adiciona|lanca|lancar|cadastr|recebi|gastei|paguei|comprei|transfere|transferi)\b/.test(normalized) && !isQuestion(text);
-  if (writing) {
-    sendJson(res, 200, {
-      reply: "Nesta aba eu não gravo lançamento. Cada pessoa lança na própria conta. Depois que salvar, o valor entra aqui nos gráficos do grupo.",
-      place: { label: "Lançar na minha conta", to: "/despesas?novo=1" },
-      confirmation: null,
-    });
+  const simple = conductSimple(text, interview, today, interview ? context : "");
+  if (!simple.ready || !simple.state?.amountCents || !simple.state.occurredOn || !simple.state.description || (simple.state.kind !== "income" && simple.state.kind !== "paid")) {
+    const question = simple.question ?? "Diga o nome, o valor e a data.";
+    const hint = simple.state ? "" : "\n\nNo grupo, você também pode perguntar o que vocês lançaram ou quem gastou.";
+    sendJson(res, 200, { reply: `${question}${hint}`, interview: simple.state, confirmation: null });
     return;
   }
-  if (/quem gastou|quem ganhou|quem recebe|quem pagou/.test(normalized)) {
-    const lines = bundle.parts.map((part) => {
-      const model = buildDashboard(part.data, monthKey(today), today);
-      return `${part.name}: recebeu ${formatBRL(model.incomeCents)}, gastou ${formatBRL(model.spendingCents)} e ainda tem ${formatBRL(model.pendingCents)} para pagar.`;
-    });
-    const points = bundle.parts.map((part) => ({ name: part.name, totalCents: buildDashboard(part.data, monthKey(today), today).spendingCents })).filter((point) => point.totalCents > 0);
-    sendJson(res, 200, {
-      reply: ["Relatório de cada pessoa neste mês", "", ...lines, "", "O gráfico de pessoas nesta aba compara o que entrou e o que saiu."].join("\n"),
-      chart: points.length ? { title: "Gastos de cada pessoa", kind: "bars", points } : null,
-      place: { label: "Ver cada pessoa", to: "/conjunto#pessoas" },
-      confirmation: null,
-    });
-    return;
-  }
-  const forced = forcedQuery(text);
-  let query: { metric?: string | null; category_name?: string | null; account_name?: string | null; month?: string | null; months?: number | null; days?: number | null; amount_cents?: number | null; installments?: number | null; payment?: "cash" | "credit" | null; starting_on?: string | null } | null = forced
-    ? {
-        ...forced,
-        amount_cents: forced.metric === "can_afford" ? resolveAmountCents(text, null) : null,
-        installments: inferInstallments(text),
-        payment: /cart[aã]o|cr[eé]dito/i.test(text) ? "credit" : "cash",
-        months: /tr[eê]s meses/i.test(text) ? 3 : 1,
-      }
-    : null;
-  if (!query) {
-    try {
-      await consumeAiQuota(userId);
-      const intent = await interpretIntent(`Pedido sobre as contas do grupo. Não invente número e não grave lançamento.\n${text}`);
-      if (intent.action === "create_transaction" || intent.action === "create_transfer") {
-        sendJson(res, 200, {
-          reply: "Nesta aba eu não gravo lançamento. Cada pessoa lança na própria conta. Depois que salvar, o valor entra aqui nos gráficos do grupo.",
-          place: { label: "Lançar na minha conta", to: "/despesas?novo=1" },
-          confirmation: null,
-        });
-        return;
-      }
-      const amount = intent.query?.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query?.amount_cents;
-      query = intent.query?.metric ? { ...intent.query, amount_cents: amount } : { metric: "month_overview" };
-    } catch (error) {
-      if (error instanceof HttpError && error.status === 429) throw error;
-      query = { metric: "month_overview" };
-    }
-  }
-  const metric = query.metric || "month_overview";
+  const saved = await saveSimple(token, userId, simple.state, data, today);
   sendJson(res, 200, {
-    reply: `${answerQuery(query, bundle.data, today, text)}\n\nEstes números juntam só quem aceitou o grupo.`,
-    chart: chartForQuery(query, bundle.data, today, text),
-    place: householdPlace(metric),
+    reply: bundle ? `${saved.reply} Ele entra no calendário do grupo.` : saved.reply,
+    place: bundle ? { label: "Ver no calendário do grupo", to: `/conjunto?dia=${simple.state.occurredOn}` } : saved.place,
+    interview: null,
+    saved: true,
     confirmation: null,
   });
 }
@@ -362,7 +346,7 @@ async function answerHousehold(userId: string, email: string, text: string, toda
 function readInterview(value: unknown): InterviewState | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
-  if (row.kind !== "income" && row.kind !== "paid" && row.kind !== "upcoming") return null;
+  if (row.kind !== "income" && row.kind !== "paid" && row.kind !== "upcoming" && row.kind !== "unset") return null;
   return {
     kind: row.kind,
     amountCents: typeof row.amountCents === "number" && row.amountCents > 0 ? Math.round(row.amountCents) : null,
@@ -372,6 +356,8 @@ function readInterview(value: unknown): InterviewState | null {
     installments: typeof row.installments === "number" && row.installments >= 2 && row.installments <= 48 ? Math.round(row.installments) : null,
     fixed: row.fixed === true,
     pendingAccountName: typeof row.pendingAccountName === "string" && row.pendingAccountName.trim().length >= 2 ? row.pendingAccountName.trim().slice(0, 40) : null,
+    perInstallment: row.perInstallment === true,
+    askInstallments: row.askInstallments === true,
   };
 }
 
@@ -392,7 +378,7 @@ async function ensureCategory(token: string, userId: string, name: string, kind:
   return { id: String(data.id), name: clean };
 }
 
-async function saveInterview(token: string, userId: string, state: InterviewState, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace }> {
+export async function saveInterview(token: string, userId: string, state: InterviewState, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace }> {
   const occurred = state.occurredOn ?? today;
   const type = state.kind === "income" ? "income" : "expense";
   const status = state.kind === "income"
@@ -488,7 +474,7 @@ async function saveInterview(token: string, userId: string, state: InterviewStat
   };
 }
 
-async function applyChange(token: string, text: string, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace } | null> {
+export async function applyChange(token: string, text: string, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace } | null> {
   const normalized = normalizeText(text);
   const change = /\b(muda|altera|corrige|atualiza|troca)\b/.test(normalized);
   const remove = /\b(apaga|exclui|remove)\b/.test(normalized);
@@ -581,7 +567,7 @@ async function saveFixedBill(token: string, userId: string, draft: TransactionDr
   if (error) throw new HttpError(400, "Não consegui criar a conta fixa.");
 }
 
-async function launchFromGround(token: string, userId: string, grounded: GroundLaunch, data: FinanceData): Promise<{ reply: string; place: AssistantPlace }> {
+export async function launchFromGround(token: string, userId: string, grounded: GroundLaunch, data: FinanceData): Promise<{ reply: string; place: AssistantPlace }> {
   const draft = grounded.draft;
   if (!draft) throw new HttpError(400, "Falta um detalhe para lançar.");
   let categoryId = draft.categoryId;
@@ -627,13 +613,13 @@ async function launchFromGround(token: string, userId: string, grounded: GroundL
   return { reply: grounded.reply, place: saved.place };
 }
 
-function plainMessage(message: string | null | undefined): string {
+export function plainMessage(message: string | null | undefined): string {
   const text = message?.trim() ?? "";
   if (!text || /R\$\s*\d/.test(text)) return "Entendi. Vou olhar no sistema se isso existe e, se achar, eu lanço.";
   return text;
 }
 
-function lookupNotes(draft: UnderstoodDraft | null, data: FinanceData): string {
+export function lookupNotes(draft: UnderstoodDraft | null, data: FinanceData): string {
   if (!draft) return "";
   const lines: string[] = [];
   if (draft.account_name?.trim()) {
@@ -651,11 +637,71 @@ function lookupNotes(draft: UnderstoodDraft | null, data: FinanceData): string {
   return lines.length ? `\n\n${lines.join("\n")}` : "";
 }
 
-function isQuestion(text: string): boolean {
+export function isQuestion(text: string): boolean {
   if (text.includes("?")) return true;
   const normalized = normalizeText(text);
   return /^(quanto|qual|quais|como|posso|mostra|mostre|me mostra|me diga|explica|onde)/.test(normalized)
     || /\b(saldo|sobra|previsao|grafico|posso comprar|gastei com|quanto tenho|quanto gastei|quanto recebi)\b/.test(normalized);
+}
+
+async function walletId(token: string, userId: string, data: FinanceData): Promise<string> {
+  const existing = data.accounts.find((account) => !isTrashedAccount(account));
+  const client = userClient(token);
+  if (existing) {
+    if (existing.archived) {
+      await client.from("accounts").update({ archived: false }).eq("id", existing.id);
+      existing.archived = false;
+    }
+    return existing.id;
+  }
+  const inserted = await client.from("accounts").insert({
+    user_id: userId,
+    name: "Carteira",
+    institution: "",
+    type: "cash",
+    initial_balance_cents: 0,
+    color: "#1d4ed8",
+  }).select("id").single();
+  if (inserted.error || !inserted.data) throw new HttpError(400, "Não consegui guardar o lançamento.");
+  return String(inserted.data.id);
+}
+
+async function saveSimple(token: string, userId: string, state: InterviewState, data: FinanceData, today: string): Promise<{ reply: string; place: AssistantPlace }> {
+  if ((state.kind !== "income" && state.kind !== "paid") || state.amountCents == null || !state.occurredOn || !state.description) {
+    throw new HttpError(400, "Falta nome, valor ou data.");
+  }
+  const accountId = await walletId(token, userId, data);
+  const count = state.installments && state.installments >= 2 ? state.installments : 1;
+  const type = state.kind === "income" ? "income" : "expense";
+  const client = userClient(token);
+  const dates = planBankInstallments({ totalCents: state.amountCents, count, firstDate: state.occurredOn });
+  const rows = dates.map((part) => {
+    const amount = state.perInstallment ? state.amountCents ?? 0 : part.amountCents;
+    const when = part.occurredOn;
+    return {
+      user_id: userId,
+      description: count > 1 ? `${state.description} (${part.number}/${count})` : state.description,
+      amount_cents: amount,
+      type,
+      account_id: accountId,
+      occurred_on: when,
+      due_on: when,
+      status: when > today ? "planned" : type === "income" ? "received" : "paid",
+      installment_group_id: count > 1 ? undefined : null,
+      installment_number: count > 1 ? part.number : null,
+      installment_total: count > 1 ? count : null,
+    };
+  });
+  const groupId = count > 1 ? crypto.randomUUID() : null;
+  const { error } = await client.from("transactions").insert(rows.map((row) => ({ ...row, installment_group_id: groupId })));
+  if (error) throw new HttpError(400, "Não consegui salvar o lançamento.");
+  const label = type === "income" ? "recebimento" : "gasto";
+  const total = state.perInstallment ? state.amountCents * count : state.amountCents;
+  const each = state.perInstallment ? state.amountCents : dates[0]?.amountCents ?? state.amountCents;
+  const reply = count > 1
+    ? `Lancei o ${label} ${state.description} em ${count} parcelas de ${formatBRL(each)}, somando ${formatBRL(total)}, a partir de ${formatDateBR(state.occurredOn)}.`
+    : `Lancei o ${label} ${state.description} de ${formatBRL(state.amountCents)} em ${formatDateBR(state.occurredOn)}.`;
+  return { reply, place: { label: "Ver no calendário", to: `/?dia=${state.occurredOn}` } };
 }
 
 export async function handleAssistant(req: NodeRequest, res: NodeResponse): Promise<void> {
@@ -670,182 +716,23 @@ export async function handleAssistant(req: NodeRequest, res: NodeResponse): Prom
       return;
     }
     const text = String(body.text ?? "").trim();
-    const guide = body.guide === "account" || body.guide === "income" || body.guide === "paid" || body.guide === "upcoming" ? body.guide : null;
     if (text.length < 2) throw new HttpError(400, "Escreva o que você quer fazer.");
     if (text.length > 2000) throw new HttpError(400, "A mensagem pode ter no máximo 2000 caracteres.");
     const today = todayISO();
     if (body.household === true) {
-      await answerHousehold(user.id, user.email, text, today, res);
+      await answerHousehold(user.token, user.id, user.email, text, today, res, data, readInterview(body.interview), rememberedText(body.history));
       return;
     }
     const interview = readInterview(body.interview);
     const context = rememberedText(body.history);
-    const followUp = /\b(ja falei|eu ja disse|como eu disse|como falei|te falei|ja disse|crie a conta|cria a conta|o valor|pode lancar|pode salvar|isso mesmo|essa mesma)\b/.test(normalizeText(text)) || (interview != null && /\bcria\b/.test(normalizeText(text)))
-      || (/^\d/.test(text.trim()) && text.trim().length <= 20)
-      || (explicitDate(text, today) != null && text.trim().length <= 24);
-    const spoken = inferEntry(text) ?? ((interview || followUp) && !isQuestion(text) ? inferEntry(context) : null);
-    const launching = spoken != null && (readAmountCents(text) != null || readAmountCents(context) != null || interview?.amountCents != null);
-    if ((guide === "account" || wantsNewAccount(text)) && !launching) {
-      sendJson(res, 200, buildAccount(text, data, context));
+    const simple = conductSimple(text, interview, today, interview ? context : "");
+    if (!simple.ready || !simple.state?.amountCents || !simple.state.occurredOn || !simple.state.description || (simple.state.kind !== "income" && simple.state.kind !== "paid")) {
+      sendJson(res, 200, { reply: simple.question ?? "Diga o nome, o valor e a data.", interview: simple.state, confirmation: null });
       return;
     }
-    const aboutCard = /cart[aã]o|fatura/.test(normalizeText(text));
-    const cardPurchase = aboutCard && (spoken === "paid" || readAmountCents(text) != null);
-    const continuing = interview != null && continuesInterview(text, interview, data, today);
-    const guided = aboutCard ? null : guide === "income" || guide === "paid" || guide === "upcoming" ? guide : null;
-    const activeKind = cardPurchase ? null : guided ?? (continuing ? interview?.kind ?? null : null);
-    const switched = spoken != null && activeKind != null && spoken !== activeKind;
-    const entryKind = cardPurchase ? null : switched ? spoken : activeKind ?? (continuing ? null : spoken);
-    const interviewNow = continuing && !switched ? interview : null;
-    if (entryKind && !(isQuestion(text) && readAmountCents(text) == null && explicitDate(text, today) == null && !matchByName(data.accounts, text))) {
-      if (!switched) {
-        const changed = await applyChange(user.token, text, data, today);
-        if (changed && /Marquei|Apaguei|agora é/.test(changed.reply)) {
-          sendJson(res, 200, { reply: changed.reply, place: changed.place, interview: null, saved: true, confirmation: null });
-          return;
-        }
-      }
-      if (entryKind === "paid" && readAmountCents(text) == null) {
-        const marked = await applyChange(user.token, text, data, today);
-        if (marked && /Marquei/.test(marked.reply)) {
-          sendJson(res, 200, { reply: marked.reply, place: marked.place, interview: null, saved: true, confirmation: null });
-          return;
-        }
-      }
-      const result = conductInterview(entryKind, text, interviewNow, data, today, context);
-      if (!result.ready || result.state.amountCents == null || !result.state.occurredOn || !result.state.description || !result.state.accountId) {
-        sendJson(res, 200, { reply: result.question ?? "Me diga o próximo detalhe.", interview: result.state, confirmation: null });
-        return;
-      }
-      const saved = await saveInterview(user.token, user.id, result.state, data, today);
-      sendJson(res, 200, { reply: saved.reply, place: saved.place, interview: null, saved: true, confirmation: null });
-      return;
-    }
-    if (!guide) {
-      const changed = await applyChange(user.token, text, data, today);
-      if (changed) {
-        sendJson(res, 200, { reply: changed.reply, place: changed.place, interview: null, saved: true, confirmation: null });
-        return;
-      }
-    }
-    const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
-    const historyText = history.map((item) => {
-      const entry = item as { role?: string; content?: string };
-      return `${entry.role === "user" ? "Pessoa" : "Assistente"}: ${String(entry.content ?? "").slice(0, 300)}`;
-    }).join("\n");
-    if (guide === "income" || guide === "paid" || guide === "upcoming") {
-      const reminder = conductInterview(guide, "", interview, data, today).question;
-      const query = forcedQuery(text) ?? { metric: "month_overview" as const };
-      sendJson(res, 200, {
-        reply: `${answerQuery(query, data, today, text)}${reminder ? `\n\nPara continuar o lançamento: ${reminder}` : ""}`,
-        chart: chartForQuery(query, data, today, text),
-        place: chartPlace(monthKey(today)),
-        interview,
-        confirmation: null,
-      });
-      return;
-    }
-    const forced = forcedQuery(text);
-    if (forced) {
-      const amount = forced.metric === "can_afford" ? resolveAmountCents(text, null) : null;
-      const installments = inferInstallments(text);
-      const category = suggestCategory(text, data.categories, "expense");
-      const query = {
-        ...forced,
-        amount_cents: amount,
-        installments,
-        category_name: category?.name ?? null,
-        payment: /cart[aã]o|cr[eé]dito/i.test(text) ? "credit" as const : "cash" as const,
-        months: /tr[eê]s meses/i.test(text) ? 3 : /dois meses/i.test(text) ? 2 : 1,
-      };
-      sendJson(res, 200, { reply: answerQuery(query, data, today, text), chart: chartForQuery(query, data, today, text), place: placeForQuery(query, data, today, text), interview, confirmation: null });
-      return;
-    }
-    const normalized = normalizeText(text);
-    if (readAmountCents(text) == null && !inferEntry(text) && !/\b(transferi|transferir|anota|anotar|lanca|lan[cç]ar)\b/.test(normalized) && /^(oi|ola|obrigad|bom dia|boa tarde|boa noite)\b|explica|para que serve|o que (e|voce) faz|como (eu )?uso|como funciona/.test(normalized)) {
-      sendJson(res, 200, {
-        reply: "Eu cuido do seu dinheiro neste app. Digo quanto você tem, quanto deve, o que ainda vai receber e pagar, e quanto sobra no fim do mês. Quando você fala um valor, eu procuro a conta e a categoria. Se achar, eu lanço, inclusive parcela e conta fixa. Também mudo valor, data e nome, marco como pago ou recebido e apago o lançamento que você nomear.",
-        interview,
-        confirmation: null,
-      });
-      return;
-    }
-    await consumeAiQuota(user.id);
-    const ledger = ledgerTotals(data.accounts, data.transactions, today);
-    const movement = categoryMovement(data, monthKey(today));
-    const facts = {
-      hoje: today,
-      centavos: { comecou: ledger.initialCents, entrou: ledger.inCents, saiu: ledger.outCents, saldo_agora: ledger.balanceCents },
-      contas: data.accounts.map((account) => {
-        const parts = balanceParts(account, data.transactions, today);
-        return { nome: account.name, arquivada: account.archived, lancado_em: openingOn(account), comecou: parts.initialCents, entrou: parts.inCents, saiu: parts.outCents, agora: parts.balanceCents };
-      }),
-      categorias_que_ja_sairam_no_mes: movement.paid.map((item) => ({ nome: item.name, centavos: item.totalCents })),
-      categorias_que_ainda_vao_sair_no_mes: movement.pending.map((item) => ({ nome: item.name, centavos: item.totalCents })),
-      cartoes: data.cards.filter((card) => !card.archived).map((card) => card.name),
-      categorias: data.categories.map((category) => `${category.name} (${category.kind === "income" ? "receita" : "despesa"})`),
-    };
-    let intent: Awaited<ReturnType<typeof interpretIntent>>;
-    try {
-      intent = await interpretIntent(`Contexto do sistema desta pessoa:\n${JSON.stringify(facts)}\n\nConversa recente:\n${historyText || "(vazia)"}\n${interview ? `\nLancamento em andamento. Nao peca de novo o que ja esta preenchido:\n${JSON.stringify(interview)}\n` : ""}\nPedido:\n${text}`);
-    } catch (error) {
-      if (error instanceof HttpError && (error.status === 429 || error.status === 503)) throw error;
-      sendJson(res, 200, {
-        reply: "Entendi a conversa. Se quiser gravar alguma coisa, diga o valor e o nome. Eu procuro a conta e a categoria e, se achar, eu lanço.",
-        interview,
-        confirmation: null,
-      });
-      return;
-    }
-    const transfer = intent.action === "create_transfer" || /\b(transferi|transferir)\b/.test(normalizeText(text));
-    if (transfer) {
-      const move = groundTransfer(text, data, today, intent.transfer?.from_account_name, intent.transfer?.to_account_name);
-      if (!move.ready || move.amountCents == null || !move.date || !move.fromId || !move.toId) {
-        sendJson(res, 200, { reply: move.reply, interview: null, confirmation: null });
-        return;
-      }
-      const saved = await confirmDraft(user.token, {
-        kind: "transfer",
-        draft: {
-          description: intent.transfer?.description?.trim() || "Transferência",
-          amount_cents: move.amountCents,
-          occurred_on: move.date,
-          from_account_id: move.fromId,
-          to_account_id: move.toId,
-        },
-      }, data);
-      sendJson(res, 200, { reply: move.reply, place: saved.place, interview: null, saved: true, confirmation: null });
-      return;
-    }
-    const money = intent.action === "create_transaction" || intent.action === "clarify" || inferEntry(text) != null || readAmountCents(text) != null;
-    if (money && intent.action !== "query") {
-      const grounded = groundLaunch(text, data, today, plainMessage(intent.message), intent.draft ?? null, { interview, context });
-      if (!grounded.ready || !grounded.draft) {
-        sendJson(res, 200, { reply: grounded.reply, interview: grounded.interview, confirmation: null });
-        return;
-      }
-      const saved = await launchFromGround(user.token, user.id, grounded, data);
-      sendJson(res, 200, { reply: saved.reply, place: saved.place, interview: null, saved: true, confirmation: null });
-      return;
-    }
-    if (intent.action === "query" && intent.query?.metric) {
-      const amount = intent.query.metric === "can_afford" ? resolveAmountCents(text, intent.query.amount_cents) : intent.query.amount_cents;
-      const query = { ...intent.query, amount_cents: amount };
-      sendJson(res, 200, {
-        reply: `Olhei no sistema.\n\n${answerQuery(query, data, today, text)}`,
-        chart: chartForQuery(query, data, today, text),
-        place: placeForQuery(query, data, today, text),
-        interview,
-        confirmation: null,
-      });
-      return;
-    }
-    sendJson(res, 200, {
-      reply: `${plainMessage(intent.message)}${lookupNotes(intent.draft ?? null, data)}`,
-      place: placeFromText(text),
-      interview,
-      confirmation: null,
-    });
+    const saved = await saveSimple(user.token, user.id, simple.state, data, today);
+    sendJson(res, 200, { reply: saved.reply, place: saved.place, interview: null, saved: true, confirmation: null });
+    return;
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 400;
     const message = error instanceof Error ? error.message : "Não consegui concluir o pedido.";
