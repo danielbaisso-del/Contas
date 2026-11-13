@@ -37,11 +37,13 @@ No PowerShell, o `copy` cria o `.env`. Preencha esse arquivo. Não commite o `.e
 
 Esse script cria as tabelas, impede que uma pessoa veja dados de outra (Row Level Security) e cadastra as categorias iniciais quando alguém cria conta.
 
-Em **Authentication → URL Configuration**, adicione:
+Em **Authentication → URL Configuration**, o **Site URL** tem que ser o aplicativo publicado, `https://contas-ivory.vercel.app`. Se ficar `localhost`, o e-mail de confirmação manda a pessoa para o computador de quem desenvolveu.
 
-- `http://localhost:5173`
-- `http://localhost:5173/redefinir-senha`
-- o endereço da Vercel, quando publicar, também com `/redefinir-senha`
+Em **Redirect URLs**, libere:
+
+- `https://contas-ivory.vercel.app/**`
+- `https://contas-ivory.vercel.app/entrar`
+- `https://contas-ivory.vercel.app/redefinir-senha`
 
 Para uso pessoal, em **Authentication → Providers → Email**, você pode desligar “Confirm email”. Se deixar ligado, o cadastro só entra depois que você abrir o e-mail.
 

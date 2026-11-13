@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button, Field, Input } from "@/components/ui";
 import { useTheme } from "@/context/ThemeContext";
+import { authRedirect } from "@/lib/appUrl";
 import { supabase } from "@/services/supabase";
 import { Moon, Sun } from "lucide-react";
 
@@ -92,10 +93,14 @@ export function RegisterPage() {
     event.preventDefault();
     setLoading(true);
     setError("");
-    const { data, error: authError } = await supabase.auth.signUp({ email, password, options: { data: { full_name: name } } });
+    const { data, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: name }, emailRedirectTo: authRedirect("/entrar") },
+    });
     setLoading(false);
     if (authError) setError("Não foi possível criar a conta. Use uma senha com pelo menos 6 caracteres e um e-mail válido.");
-    else if (!data.session) setMessage("Conta criada. Se a confirmação de e-mail estiver ligada no Supabase, abra a mensagem antes de entrar.");
+    else if (!data.session) setMessage("Conta criada. A confirmação chega no e-mail dessa pessoa. Abra a mensagem e confirme por lá.");
     else setMessage("Conta criada. Você já pode entrar.");
   }
   return (
@@ -120,12 +125,12 @@ export function ForgotPasswordPage() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
-    const { error: authError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/redefinir-senha` });
+    const { error: authError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: authRedirect("/redefinir-senha") });
     if (authError) setError("Não foi possível enviar o e-mail. Confira o endereço e se a URL de redirecionamento está liberada no Supabase.");
     else setMessage("Se o e-mail existir, você receberá um link para escolher outra senha.");
   }
   return (
-    <AuthShell title="Recuperar senha" text="O link volta para esta aplicação, na página de nova senha.">
+    <AuthShell title="Recuperar senha" text="O link chega no e-mail e abre a página de nova senha no aplicativo publicado.">
       <form className="space-y-4" onSubmit={submit}>
         <Field label="E-mail"><Input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
         {error ? <p className="text-sm text-expense">{error}</p> : null}

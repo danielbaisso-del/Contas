@@ -5,6 +5,7 @@ import { Button, DateBRField, Field, Input, Modal, MoneyField, MoneyText } from 
 import { useFinance } from "@/context/FinanceContext";
 import { useToast } from "@/context/ToastContext";
 import { amountLines, launchItems } from "@/domain/launches";
+import { totalBalance } from "@/finance/engine";
 import { calendarCells, formatDateBR, formatMonthLabel, monthKey, shiftMonth } from "@/lib/dates";
 import { formatBRL, splitAmount } from "@/lib/money";
 import { errorMessage, cx } from "@/lib/utils";
@@ -109,6 +110,7 @@ export function HomePage() {
     return { ...item, after: running };
   });
   const editingItem = editing ? items.find((item) => item.id === editing) : null;
+  const balance = totalBalance(data.accounts, data.transactions, today);
 
   return (
     <div className="space-y-4">
@@ -120,6 +122,10 @@ export function HomePage() {
           <button className="px-2 py-1.5" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Próximo mês"><ChevronRight size={16} /></button>
         </div>
       </div>
+      <article className="flex w-fit items-baseline gap-3 rounded-2xl border border-line bg-surface px-4 py-2.5">
+        <span className="text-xs font-medium text-muted">Saldo atual</span>
+        <span className="text-lg font-semibold"><MoneyText cents={balance} tone="auto" /></span>
+      </article>
       <div className="rounded-3xl border border-line bg-surface p-3 sm:p-4">
         <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-muted">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}</div>
         <div className="mt-2 grid grid-cols-7 gap-1">
